@@ -9,14 +9,21 @@ import {
 test.beforeEach(async ({ request }) => {
   const headers = { Authorization: 'Bearer e2e-agent-token' };
   const old = await request.get('/api/v1/trips/example-trip', { headers });
+  await expect(old).toBeOK();
   const value = await old.json();
-  await request.delete('/api/v1/trips/example-trip', {
-    headers: { ...headers, 'If-Match': value.etag },
+  const removed = await request.delete('/api/v1/trips/example-trip', {
+    headers: { ...headers, 'X-Trip-Version': value.etag },
   });
+  await expect(removed).toBeOK();
   const plan = exampleTrip().plan;
   plan.costs[0] = { ...plan.costs[0], currency: 'PLN', min: 45, max: 55 };
-  await request.post('/api/v1/trips', { headers, data: { id: 'example-trip', plan } });
-  await request.post('/api/v1/trips/example-trip/rates', { headers, data: {} });
+  const created = await request.post('/api/v1/trips', {
+    headers,
+    data: { id: 'example-trip', plan },
+  });
+  await expect(created).toBeOK();
+  const rates = await request.post('/api/v1/trips/example-trip/rates', { headers, data: {} });
+  await expect(rates).toBeOK();
 });
 const connection = async (
   offline: boolean,
@@ -145,9 +152,11 @@ test('renders an original PDF for the first time while offline', async ({
 }) => {
   const headers = { Authorization: 'Bearer e2e-agent-token' },
     bytes = pdfDocument();
-  const value = await (await request.get('/api/v1/trips/example-trip', { headers })).json();
+  const current = await request.get('/api/v1/trips/example-trip', { headers });
+  await expect(current).toBeOK();
+  const value = await current.json();
   const made = await request.post('/api/v1/trips/example-trip/tickets', {
-    headers: { ...headers, 'If-Match': value.etag },
+    headers: { ...headers, 'X-Trip-Version': value.etag },
     data: {
       title: 'PDF offline',
       filename: 'ticket.pdf',
@@ -157,6 +166,7 @@ test('renders an original PDF for the first time while offline', async ({
       size: bytes.length,
     },
   });
+  await expect(made).toBeOK();
   const ticket = (await made.json()).trip.state.tickets[0];
   expect(
     (
