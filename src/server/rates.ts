@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ApiError, type Storage } from './storage';
+import { ApiError, type Storage } from './storage.js';
 export const RateSchema = z.object({
   currency: z.string(),
   euroPerUnit: z.number().positive().finite(),

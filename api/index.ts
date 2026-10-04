@@ -1,6 +1,6 @@
 import { handle } from '@hono/node-server/vercel';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createApp } from '../src/server/app';
+import { createApp } from '../src/server/app.js';
 const handler = handle(createApp());
 export default async function api(req: VercelRequest, res: VercelResponse) {
   const route = req.query.route;

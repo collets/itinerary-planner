@@ -2,6 +2,8 @@
 
 `pnpm check` runs TypeScript, ESLint, domain/API tests and the production PWA build. `pnpm test:e2e` uses an isolated temporary store and the actual production build.
 
+Every production build also runs `pnpm check:server`: TypeScript compiles the API and domain code with NodeNext resolution, then plain Node imports the emitted JavaScript and checks health and secure login. Server imports use explicit `.js` extensions so Vercel's native ESM loader can resolve them. This check does not use Vite or tsx, which accept extensionless imports that fail in production.
+
 Mobile Chromium and mobile WebKit workflows cover full-day overview, stop/leg navigation, route POIs, visible timing, no horizontal page overflow, progress, shared ticket upload, traveler filters, explicit offline download, offline deep-link reload, dated EUR budget display, offline checklist synchronization, and first-time PDF rendering offline.
 
 The Vercel adapter test checks that native API rewrites preserve HTTPS Origin and Secure cookies. API tests exercise authentication, cross-origin rejection, concurrency/ETags, snapshot restores, private original bytes, invalid file signatures, attached-step validation, plan dry runs/patches, machine-readable schemas and exchange-rate caching/outage fallback. These tests use fictional places and test credentials.

@@ -13,12 +13,12 @@ import {
   ReservationSchema,
   TicketSchema,
   ProgressStatus,
-} from '../domain/schema';
-import { bookingWarnings } from '../domain/trip';
-import { ApiError, storage } from './storage';
-import { TripService } from './service';
-import { checkOrigin, login, logout, role } from './auth';
-import { exchangeRate } from './rates';
+} from '../domain/schema.js';
+import { bookingWarnings } from '../domain/trip.js';
+import { ApiError, storage } from './storage.js';
+import { TripService } from './service.js';
+import { checkOrigin, login, logout, role } from './auth.js';
+import { exchangeRate } from './rates.js';
 
 const prefix = '/api/v1';
 type Env = { Variables: { role: 'agent' | 'browser' } };

@@ -1,4 +1,4 @@
-import type { Plan, Step, Trip } from './schema';
+import type { Plan, Step, Trip } from './schema.js';
 
 export function orderedSteps(plan: Plan): Step[] {
   return plan.days

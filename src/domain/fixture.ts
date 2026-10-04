@@ -1,4 +1,4 @@
-import { TripSchema, emptyState, type Trip } from './schema';
+import { TripSchema, emptyState, type Trip } from './schema.js';
 export function exampleTrip(): Trip {
   return TripSchema.parse({
     schemaVersion: '1',

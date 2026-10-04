@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { SignJWT, jwtVerify } from 'jose';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import type { Context } from 'hono';
-import { ApiError } from './storage';
+import { ApiError } from './storage.js';
 
 export const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');
 const sameHash = (key: string, hash: string | undefined) => {

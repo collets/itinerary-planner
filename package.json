@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "node --import tsx scripts/dev.ts",
     "setup": "node --import tsx scripts/setup.ts",
-    "build": "node --import tsx scripts/assets.ts && tsc --noEmit && vite build",
+    "build": "pnpm check:server && node --import tsx scripts/assets.ts && tsc --noEmit && vite build",
+    "check:server": "tsc --project tsconfig.server.json && node scripts/check-server.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

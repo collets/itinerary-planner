@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { TripSchema, emptyState, type Trip, type Plan } from '../domain/schema';
-import { ApiError, type Storage } from './storage';
+import { TripSchema, emptyState, type Trip, type Plan } from '../domain/schema.js';
+import { ApiError, type Storage } from './storage.js';
 
 export class TripService {
   constructor(public store: Storage) {}

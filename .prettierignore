@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.server-build/
 local-data/
 public/pdf-assets/
 pnpm-lock.yaml
