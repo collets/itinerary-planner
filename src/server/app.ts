@@ -31,8 +31,7 @@ export function createApp(injected?: TripService) {
       throw new ApiError(403, 'Agent access required for itinerary edits');
   };
   const result = (c: Context, value: Awaited<ReturnType<TripService['read']>>) => {
-    // Return the new version in JSON after mutations. Vercel may re-evaluate
-    // If-Match against a response ETag and turn an applied write into an empty 412.
+    // Mutation versions belong in JSON; HTTP ETags are read validators.
     if (['GET', 'HEAD'].includes(c.req.method)) c.header('ETag', value.etag);
     return c.json({ ...value, warnings: bookingWarnings(value.trip) });
   };
@@ -145,7 +144,7 @@ export function createApp(injected?: TripService) {
   });
   app.delete(`${prefix}/trips/:id`, async (c) => {
     agent(c);
-    await service().delete(id(c), c.req.header('If-Match'));
+    await service().delete(id(c), c.req.header('X-Trip-Version'));
     return c.json({ ok: true });
   });
   app.get(`${prefix}/trips/:id/plan`, async (c) => {
@@ -176,7 +175,7 @@ export function createApp(injected?: TripService) {
     const plan = PlanSchema.parse(await c.req.json());
     if (c.req.query('dryRun') === 'true') {
       const value = await service().read(id(c));
-      if (c.req.header('If-Match') !== value.etag) throw new ApiError(412, 'The document changed');
+      if (c.req.header('X-Trip-Version') !== value.etag) throw new ApiError(412, 'The document changed');
       const preview = TripSchema.parse({ ...value.trip, plan });
       return c.json({
         valid: true,
@@ -188,7 +187,7 @@ export function createApp(injected?: TripService) {
       c,
       await service().mutate(
         id(c),
-        c.req.header('If-Match'),
+        c.req.header('X-Trip-Version'),
         (draft) => {
           draft.plan = plan;
         },
@@ -213,7 +212,7 @@ export function createApp(injected?: TripService) {
       c,
       await service().mutate(
         id(c),
-        c.req.header('If-Match'),
+        c.req.header('X-Trip-Version'),
         (draft) => {
           try {
             draft.plan = PlanSchema.parse(
@@ -246,7 +245,7 @@ export function createApp(injected?: TripService) {
       c,
       await service().mutate(
         id(c),
-        c.req.header('If-Match'),
+        c.req.header('X-Trip-Version'),
         (draft) => {
           draft.plan = previous.plan;
         },
@@ -262,7 +261,7 @@ export function createApp(injected?: TripService) {
       .parse(await c.req.json());
     return result(
       c,
-      await service().mutate(id(c), c.req.header('If-Match'), (draft) => {
+      await service().mutate(id(c), c.req.header('X-Trip-Version'), (draft) => {
         if (!draft.plan.steps.some((s) => s.id === stepId))
           throw new ApiError(404, 'Step not found');
         if (body.expected && (draft.state.progress[stepId] ?? 'pending') !== body.expected)
@@ -279,7 +278,7 @@ export function createApp(injected?: TripService) {
       .parse(await c.req.json());
     return result(
       c,
-      await service().mutate(id(c), c.req.header('If-Match'), (draft) => {
+      await service().mutate(id(c), c.req.header('X-Trip-Version'), (draft) => {
         if (!draft.plan.tasks.some((t) => t.id === taskId))
           throw new ApiError(404, 'Task not found');
         if (
@@ -295,7 +294,7 @@ export function createApp(injected?: TripService) {
     const reservation = ReservationSchema.parse(await c.req.json());
     return result(
       c,
-      await service().mutate(id(c), c.req.header('If-Match'), (draft) => {
+      await service().mutate(id(c), c.req.header('X-Trip-Version'), (draft) => {
         if (draft.state.reservations.some((r) => r.id === reservation.id))
           throw new ApiError(409, 'Reservation already exists');
         draft.state.reservations.push(reservation);
@@ -315,7 +314,7 @@ export function createApp(injected?: TripService) {
     const reservationId = id(c, 'reservationId');
     return result(
       c,
-      await service().mutate(id(c), c.req.header('If-Match'), (draft) => {
+      await service().mutate(id(c), c.req.header('X-Trip-Version'), (draft) => {
         const r = draft.state.reservations.find((r) => r.id === reservationId);
         if (!r) throw new ApiError(404, 'Reservation not found');
         Object.assign(r, body);
@@ -328,7 +327,7 @@ export function createApp(injected?: TripService) {
     const reservationId = id(c, 'reservationId');
     return result(
       c,
-      await service().mutate(id(c), c.req.header('If-Match'), (draft) => {
+      await service().mutate(id(c), c.req.header('X-Trip-Version'), (draft) => {
         draft.state.reservations = draft.state.reservations.filter((r) => r.id !== reservationId);
       }),
     );
@@ -347,7 +346,7 @@ export function createApp(injected?: TripService) {
           : 'jpg';
     return result(
       c,
-      await service().mutate(tripId, c.req.header('If-Match'), (draft) => {
+      await service().mutate(tripId, c.req.header('X-Trip-Version'), (draft) => {
         draft.state.tickets.push({
           ...body,
           id: ticketId,
@@ -401,7 +400,7 @@ export function createApp(injected?: TripService) {
     const ticketId = id(c, 'ticketId');
     return result(
       c,
-      await service().mutate(id(c), c.req.header('If-Match'), (draft) => {
+      await service().mutate(id(c), c.req.header('X-Trip-Version'), (draft) => {
         const t = draft.state.tickets.find((t) => t.id === ticketId);
         if (!t) throw new ApiError(404, 'Ticket not found');
         Object.assign(t, body);
@@ -412,7 +411,7 @@ export function createApp(injected?: TripService) {
   app.delete(`${prefix}/trips/:id/tickets/:ticketId`, async (c) => {
     let path = '';
     const ticketId = id(c, 'ticketId');
-    const value = await service().mutate(id(c), c.req.header('If-Match'), (draft) => {
+    const value = await service().mutate(id(c), c.req.header('X-Trip-Version'), (draft) => {
       const t = draft.state.tickets.find((t) => t.id === ticketId);
       if (!t) throw new ApiError(404, 'Ticket not found');
       path = t.pathname;
@@ -432,7 +431,7 @@ export function openapi() {
     '401': { description: 'Authentication required' },
     '412': { description: 'Stale ETag; re-read and merge' },
     '422': { description: 'Validation failed' },
-    '428': { description: 'If-Match required' },
+    '428': { description: 'X-Trip-Version required' },
   };
   const paths: Record<string, unknown> = {};
   const routes: [string, string[], string][] = [
@@ -446,7 +445,7 @@ export function openapi() {
     [
       '/trips/{id}/plan',
       ['get', 'put', 'patch'],
-      'Agent plan editing; PUT Plan, PATCH RFC6902. If-Match required. PUT ?dryRun=true validates',
+      'Agent plan editing; PUT Plan, PATCH RFC6902. X-Trip-Version required. PUT ?dryRun=true validates',
     ],
     ['/trips/{id}/history', ['get'], 'Agent reads available plan snapshots'],
     [
@@ -454,7 +453,7 @@ export function openapi() {
       ['post'],
       'Refresh approximate EUR conversions from ECB through Frankfurter; cached 24 hours',
     ],
-    ['/trips/{id}/restore/{revision}', ['post'], 'Agent restores plan; If-Match required'],
+    ['/trips/{id}/restore/{revision}', ['post'], 'Agent restores plan; X-Trip-Version required'],
     [
       '/trips/{id}/progress/{stepId}',
       ['patch'],
@@ -549,7 +548,7 @@ export function openapi() {
         !path.endsWith('/file')
       )
         operation.parameters.push({
-          name: 'If-Match',
+          name: 'X-Trip-Version',
           in: 'header',
           required: true,
           schema: { type: 'string' },

@@ -53,7 +53,7 @@ export class TripService {
     change: (trip: Trip) => void,
     snapshot = false,
   ) {
-    if (!expected) throw new ApiError(428, 'If-Match is required');
+    if (!expected) throw new ApiError(428, 'X-Trip-Version is required');
     const { trip, etag } = await this.read(id);
     if (expected !== etag)
       throw new ApiError(412, 'The document changed. Pull again before editing.');
@@ -88,7 +88,7 @@ export class TripService {
     return { trip: valid, etag: nextEtag };
   }
   async delete(id: string, expected: string | undefined) {
-    if (!expected) throw new ApiError(428, 'If-Match is required');
+    if (!expected) throw new ApiError(428, 'X-Trip-Version is required');
     const { trip, etag } = await this.read(id);
     if (etag !== expected) throw new ApiError(412, 'The document changed');
     // Remove the document first, so no new uploads can be authorized.

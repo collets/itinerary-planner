@@ -23,7 +23,7 @@ const call = (
     headers: {
       Authorization: `Bearer ${token}`,
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-      ...(etag ? { 'If-Match': etag } : {}),
+      ...(etag ? { 'X-Trip-Version': etag } : {}),
       ...extra,
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),

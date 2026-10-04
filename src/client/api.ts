@@ -29,7 +29,7 @@ export async function request<T>(
   const response = await fetch('/api/v1' + path, {
     method,
     credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...(etag ? { 'If-Match': etag } : {}) },
+    headers: { 'Content-Type': 'application/json', ...(etag ? { 'X-Trip-Version': etag } : {}) },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   if (!response.ok) {

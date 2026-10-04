@@ -35,7 +35,7 @@ async function request(path: string, method = 'GET', body?: unknown, etag?: stri
   if (!token) throw new Error('Set ITINERARY_API_TOKEN in an ignored environment file');
   const response = await fetch(base + path, {
     method,
-    headers: { ...headers(), ...(etag ? { 'If-Match': etag } : {}) },
+    headers: { ...headers(), ...(etag ? { 'X-Trip-Version': etag } : {}) },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const data = await response.json();

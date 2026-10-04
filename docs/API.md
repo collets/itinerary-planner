@@ -1,6 +1,6 @@
 # API
 
-Base URL: `/api/v1`. `/health` is public; trip data and API schemas require authentication. Responses use `Cache-Control: private, no-store`. Most trip mutations return `{trip, etag, warnings}`. Read responses also include an `ETag` header; mutations return the new version only in JSON to avoid the hosting edge rechecking the request's old `If-Match` against the newly written version. Validation errors contain `issues` with paths and messages.
+Base URL: `/api/v1`. `/health` is public; trip data and API schemas require authentication. Responses use `Cache-Control: private, no-store`. Most trip mutations return `{trip, etag, warnings}`. Read responses also include an `ETag` header; mutations return the new version only in JSON. Validation errors contain `issues` with paths and messages.
 
 ## Authentication
 
@@ -8,7 +8,7 @@ Agents send `Authorization: Bearer <ITINERARY_API_TOKEN>`. Browsers POST `{key}`
 
 ## Concurrency
 
-Read the current version from the JSON `etag` field of GET `/trips/{id}` or `/trips/{id}/plan`. Use that field rather than the HTTP response header, which the hosting edge may weaken during compression. Set `If-Match` on plan, progress, checklist, booking, ticket metadata and deletion mutations. Missing header returns 428; outdated header returns 412. Re-read, merge and retry. Expected original checklist/progress values return 409 on conflicting edits. Rates and upload finalization manage their own concurrency; ticket upload bytes use previously authorized pending metadata.
+Read the current version from the JSON `etag` field of GET `/trips/{id}` or `/trips/{id}/plan`. Use that field rather than the HTTP response header, which the hosting edge may weaken during compression. Send the version in `X-Trip-Version` on plan, progress, checklist, booking, ticket metadata and deletion mutations. This dedicated header avoids Vercel treating the standard `If-Match` as a condition on the response after a successful write. Blob storage still enforces its own atomic `ifMatch` internally. Missing header returns 428; outdated header returns 412. Re-read, merge and retry. Expected original checklist/progress values return 409 on conflicting edits. Rates and upload finalization manage their own concurrency; ticket upload bytes use previously authorized pending metadata.
 
 | Endpoint                                   | Method | Body / behavior                                                                           |
 | ------------------------------------------ | ------ | ----------------------------------------------------------------------------------------- |
@@ -41,7 +41,7 @@ Read the current version from the JSON `etag` field of GET `/trips/{id}` or `/tr
 
 Production tickets upload directly to Blob so the 4.5 MB Vercel Function request limit does not constrain a 10 MB ticket. Use `@vercel/blob/client`:
 
-1. Create pending ticket metadata with If-Match and retrieve its generated ID/pathname.
+1. Create pending ticket metadata with X-Trip-Version and retrieve its generated ID/pathname.
 2. Call SDK `upload(pathname, file, {access:'private', contentType, handleUploadUrl:'/api/v1/uploads/blob', clientPayload:JSON.stringify({tripId,ticketId})})`.
 3. For an agent, supply the Bearer header through the SDK `headers` option. Browsers use the same-origin cookie.
 4. POST `/finalize`; signed callbacks may already have finalized the upload. The operation is idempotent.
