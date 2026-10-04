@@ -10,6 +10,12 @@ import {
 } from '../src/domain/trip';
 import { inputToInstant, zonedInput } from '../src/domain/datetime';
 describe('trip integrity', () => {
+  it('rejects a trip without any navigable steps', () => {
+    const trip = exampleTrip();
+    trip.plan.steps = [];
+    trip.plan.days[0].stepIds = [];
+    expect(TripSchema.safeParse(trip).success).toBe(false);
+  });
   it('rejects dangling references and duplicated day membership', () => {
     const trip = exampleTrip();
     trip.plan.steps[0] = {

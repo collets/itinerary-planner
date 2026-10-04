@@ -156,7 +156,7 @@ export const PlanSchema = z
           .strict(),
       )
       .min(1),
-    steps: z.array(StepSchema),
+    steps: z.array(StepSchema).min(1),
     places: z.array(PlaceSchema),
     sources: z.array(SourceSchema),
     costs: z.array(CostSchema).default([]),
