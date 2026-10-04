@@ -31,7 +31,9 @@ export function createApp(injected?: TripService) {
       throw new ApiError(403, 'Agent access required for itinerary edits');
   };
   const result = (c: Context, value: Awaited<ReturnType<TripService['read']>>) => {
-    c.header('ETag', value.etag);
+    // Return the new version in JSON after mutations. Vercel may re-evaluate
+    // If-Match against a response ETag and turn an applied write into an empty 412.
+    if (['GET', 'HEAD'].includes(c.req.method)) c.header('ETag', value.etag);
     return c.json({ ...value, warnings: bookingWarnings(value.trip) });
   };
   app.use('*', secureHeaders());

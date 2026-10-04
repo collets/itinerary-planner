@@ -1,6 +1,6 @@
 # API
 
-Base URL: `/api/v1`. `/health` is public; trip data and API schemas require authentication. Responses use `Cache-Control: private, no-store`. Most trip mutations return `{trip, etag, warnings}` and an `ETag` header. Validation errors contain `issues` with paths and messages.
+Base URL: `/api/v1`. `/health` is public; trip data and API schemas require authentication. Responses use `Cache-Control: private, no-store`. Most trip mutations return `{trip, etag, warnings}`. Read responses also include an `ETag` header; mutations return the new version only in JSON to avoid the hosting edge rechecking the request's old `If-Match` against the newly written version. Validation errors contain `issues` with paths and messages.
 
 ## Authentication
 
@@ -8,7 +8,7 @@ Agents send `Authorization: Bearer <ITINERARY_API_TOKEN>`. Browsers POST `{key}`
 
 ## Concurrency
 
-Read the current ETag from GET `/trips/{id}` or `/trips/{id}/plan`. Set `If-Match` on plan, progress, checklist, booking, ticket metadata and deletion mutations. Missing header returns 428; outdated header returns 412. Re-read, merge and retry. Expected original checklist/progress values return 409 on conflicting edits. Rates and upload finalization manage their own concurrency; ticket upload bytes use previously authorized pending metadata.
+Read the current version from the JSON `etag` field of GET `/trips/{id}` or `/trips/{id}/plan`. Use that field rather than the HTTP response header, which the hosting edge may weaken during compression. Set `If-Match` on plan, progress, checklist, booking, ticket metadata and deletion mutations. Missing header returns 428; outdated header returns 412. Re-read, merge and retry. Expected original checklist/progress values return 409 on conflicting edits. Rates and upload finalization manage their own concurrency; ticket upload bytes use previously authorized pending metadata.
 
 | Endpoint                                   | Method | Body / behavior                                                                           |
 | ------------------------------------------ | ------ | ----------------------------------------------------------------------------------------- |

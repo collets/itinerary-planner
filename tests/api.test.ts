@@ -81,6 +81,11 @@ describe('private API and edits', () => {
       call('/api/v1/trips/example-trip/progress/square', 'PATCH', { status: 'done' }, value.etag),
     ]);
     expect(responses.map((r) => r.status).sort()).toEqual([200, 412]);
+    const success = responses.find((r) => r.status === 200)!;
+    expect(success.headers.get('etag')).toBeNull();
+    const updated = await success.json();
+    expect(updated.etag).not.toBe(value.etag);
+    expect(updated.etag).toBe((await service.read('example-trip')).etag);
   });
   it('preserves live state on plan edit and restores only the plan', async () => {
     let value = await service.read('example-trip');
