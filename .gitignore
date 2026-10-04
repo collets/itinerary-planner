@@ -1,0 +1,12 @@
+node_modules/
+dist/
+local-data/
+.env*
+!.env.example
+.vercel/
+test-results/
+playwright-report/
+coverage/
+*.tsbuildinfo
+.tokensave/
+public/pdf-assets/

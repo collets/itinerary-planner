@@ -1,0 +1,7 @@
+node_modules/
+dist/
+local-data/
+public/pdf-assets/
+pnpm-lock.yaml
+test-results/
+playwright-report/
