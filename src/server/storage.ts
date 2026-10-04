@@ -118,7 +118,13 @@ export class FileStorage implements Storage {
 export class BlobStorage implements Storage {
   async read(path: string): Promise<Stored | null> {
     try {
-      const result = await get(path, { access: 'private', useCache: false });
+      // Compressed delivery returns a weak ETag, which cannot authorize an atomic
+      // conditional write. Request the original representation and its strong ETag.
+      const result = await get(path, {
+        access: 'private',
+        useCache: false,
+        headers: { 'Accept-Encoding': 'identity' },
+      });
       if (!result || !result.stream) return null;
       return {
         body: new Uint8Array(await new Response(result.stream).arrayBuffer()),
@@ -173,7 +179,13 @@ export class BlobStorage implements Storage {
   }
   async stream(path: string) {
     try {
-      return (await get(path, { access: 'private', useCache: false }))?.stream ?? null;
+      return (
+        await get(path, {
+          access: 'private',
+          useCache: false,
+          headers: { 'Accept-Encoding': 'identity' },
+        })
+      )?.stream ?? null;
     } catch (e) {
       if (e instanceof BlobNotFoundError) return null;
       throw e;
