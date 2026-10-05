@@ -6,8 +6,10 @@ import {
   AiModelOutputSchema,
   AiRouteSchema,
   AiProposalSchema,
+  AiDiscoverySchema,
   AiPlanError,
   aiContext,
+  withDiscovery,
   intentAction,
   projectAiProposal,
   type AiRequest,
@@ -60,11 +62,12 @@ const JobSchema = z
       'applying',
       'applied',
     ]),
-    stage: z.enum(['model', 'routes', 'finalize', 'done']),
+    stage: z.enum(['research', 'model', 'routes', 'finalize', 'done']),
     message: z.string().max(4000),
     owner: z.string().optional(),
     startedAt: z.iso.datetime().optional(),
     output: AiModelOutputSchema.optional(),
+    discovery: AiDiscoverySchema.default({ places: [], sources: [], notes: [] }),
     queue: z
       .array(z.object({ fromPlaceId: Id, toPlaceId: Id, poiPlaceIds: z.array(Id).max(3) }).strict())
       .max(6)
@@ -113,6 +116,43 @@ export class AiService {
     if (!this.providers) throw new ApiError(503, 'Assistenza AI non ancora configurata.');
     return this.providers;
   }
+  private async conversation(tripId: string, request: AiRequest, currentEtag: string) {
+    const messages: ReturnType<typeof aiContext>['conversation'] = [];
+    let id = request.parentJobId;
+    const seen = new Set<string>();
+    while (id && messages.length < 3) {
+      if (seen.has(id)) throw new ApiError(409, 'Conversazione non valida.');
+      seen.add(id);
+      const { job } = await this.readJob(tripId, id);
+      const applied =
+        job.status === 'applying' &&
+        (await this.trips.read(tripId)).trip.travel?.appliedIds.some((proposalId) =>
+          job.proposalIds.includes(proposalId),
+        );
+      if (
+        job.request.dayId !== request.dayId ||
+        !terminal.has(job.status) ||
+        (job.status === 'applying' && !applied)
+      )
+        throw new ApiError(
+          409,
+          'Attendi la richiesta in corso o inizia una nuova conversazione per questa giornata.',
+        );
+      messages.unshift({
+        request: job.request.text.slice(0, 700),
+        response: applied
+          ? 'La proposta precedente è stata applicata al programma.'
+          : job.message.slice(0, 1000),
+        options:
+          job.output?.options.map(
+            (option) => `${option.title}: ${option.explanation.slice(0, 400)}`,
+          ) ?? [],
+        previousPlan: job.baseEtag !== currentEtag,
+      });
+      id = job.request.parentJobId;
+    }
+    return messages;
+  }
   async availability() {
     if (!this.providers) return { enabled: false, mode: 'off' as const };
     const budget = await this.budget.status();
@@ -140,7 +180,7 @@ export class AiService {
   }
   async get(tripId: string, id: string): Promise<AiJobView> {
     // Trip existence is checked even for cached jobs; deleted trips stay private.
-    await this.trips.read(tripId);
+    const { trip } = await this.trips.read(tripId);
     const { job } = await this.readJob(tripId, id);
     const proposals: AiProposal[] = [];
     for (const proposalId of job.proposalIds) {
@@ -153,14 +193,19 @@ export class AiService {
       }
     }
     const abandoned = job.status === 'running' && this.now() - Date.parse(job.startedAt!) > 50_000;
+    const applied = job.proposalIds.some((proposalId) =>
+      trip.travel?.appliedIds.includes(proposalId),
+    );
     return {
       id: job.id,
       tripId,
       dayId: job.request.dayId,
-      status: abandoned ? 'uncertain' : job.status,
-      message: abandoned
-        ? 'Richiesta interrotta. La spesa deve essere verificata; non viene riavviata automaticamente.'
-        : job.message,
+      status: applied ? 'applied' : abandoned ? 'uncertain' : job.status,
+      message: applied
+        ? 'Proposta applicata al programma condiviso.'
+        : abandoned
+          ? 'Richiesta interrotta. La spesa deve essere verificata; non viene riavviata automaticamente.'
+          : job.message,
       createdAt: job.createdAt,
       expiresAt: job.expiresAt,
       mock: this.providers?.mode === 'mock',
@@ -184,6 +229,7 @@ export class AiService {
       throw new ApiError(412, 'Il programma è cambiato. Aggiorna prima di chiedere assistenza.');
     const draft = request.draft ? applyTravel(trip, request.draft) : trip;
     const context = aiContext(draft, request);
+    context.conversation = await this.conversation(tripId, request, etag);
     provider.modelBound(context); // Pricing and input caps fail before starting a job.
     const timestamp = new Date(this.now()).toISOString();
     const job = JobSchema.parse({
@@ -195,7 +241,11 @@ export class AiService {
       createdAt: timestamp,
       expiresAt: new Date(this.now() + 30 * 60_000).toISOString(),
       status: 'queued',
-      stage: 'model',
+      stage:
+        request.preference === 'scenic' ||
+        /percors|strad|cammin|luoghi|passegg|punti di interesse|aggiung/i.test(request.text)
+          ? 'research'
+          : 'model',
       message: 'Richiesta pronta. Il programma resta invariato.',
     });
     await this.budget.start({ id: request.id, scope: tripId, requestHash });
@@ -229,10 +279,12 @@ export class AiService {
     }
   }
   private collectRoutes(trip: Trip, job: Job): RouteQuery[] {
+    trip = withDiscovery(trip, job.discovery);
     const queue: RouteQuery[] = [];
     const context = aiContext(
       job.request.draft ? applyTravel(trip, job.request.draft) : trip,
       job.request,
+      job.discovery.places.map((p) => p.id),
     );
     const allowed = new Set(context.places.map((p) => p.id));
     const add = (query: RouteQuery) => {
@@ -249,13 +301,23 @@ export class AiService {
       let draft = job.request.draft ? applyTravel(trip, job.request.draft) : trip;
       option.routes.forEach(add);
       for (const [index, intent] of option.actions.entries()) {
-        const action = intentAction(draft, job.request.dayId, intent);
+        const action = intentAction(
+          draft,
+          job.request.dayId,
+          intent,
+          `${hash(job.id).slice(0, 40)}-trial-${index}`,
+        );
+        if (intent.type === 'add' && (!intent.placeId || !allowed.has(intent.placeId)))
+          throw new AiPlanError(
+            'invalid',
+            'La nuova tappa deve usare un luogo presente nel contesto verificato.',
+          );
         const needs = routeNeeds(draft, action);
         needs.forEach((r) =>
           add({ fromPlaceId: r.fromPlaceId, toPlaceId: r.toPlaceId, poiPlaceIds: [] }),
         );
         draft = applyTravel(draft, {
-          id: `${job.id.slice(0, 55)}-trial-${index}`,
+          id: `${hash(job.id).slice(0, 40)}-trial-${index}`,
           action,
           routes: needs,
           expected: preconditions(draft, action),
@@ -271,11 +333,18 @@ export class AiService {
     return queue;
   }
   private proposal(trip: Trip, job: Job, index: number): AiProposal {
+    const original = trip;
+    trip = withDiscovery(trip, job.discovery);
     const option = job.output!.options[index];
     let draft = job.request.draft ? applyTravel(trip, job.request.draft) : trip;
     const commands: TravelCommand[] = job.request.draft ? [job.request.draft] : [];
     for (const [i, intent] of option.actions.entries()) {
-      const action = intentAction(draft, job.request.dayId, intent);
+      const action = intentAction(
+        draft,
+        job.request.dayId,
+        intent,
+        `${hash(job.id).slice(0, 40)}-option-${index}-${i}`,
+      );
       const needs = routeNeeds(draft, action);
       const routes = needs.map((need) => {
         const result = job.routes.find(
@@ -286,7 +355,7 @@ export class AiService {
         return { ...need, durationMinutes: result.durationMinutes };
       });
       const command: TravelCommand = {
-        id: `${job.id.slice(0, 55)}-option-${index}-${i}`,
+        id: `${hash(job.id).slice(0, 40)}-option-${index}-${i}`,
         action,
         routes,
         expected: preconditions(draft, action),
@@ -295,7 +364,11 @@ export class AiService {
       draft = applyTravel(draft, command);
       commands.push(command);
     }
-    const context = aiContext(trip, job.request);
+    const context = aiContext(
+      trip,
+      job.request,
+      job.discovery.places.map((p) => p.id),
+    );
     const citations = option.sourceIds.map((id) => {
       const source = context.sources.find((s) => s.id === id);
       if (!source)
@@ -325,7 +398,7 @@ export class AiService {
           )),
     );
     const proposal: AiProposalInput = {
-      id: `proposal-${job.id.slice(0, 55)}-${index}`,
+      id: `proposal-${hash(job.id).slice(0, 40)}-${index}`,
       tripId: job.tripId,
       jobId: job.id,
       dayId: job.request.dayId,
@@ -338,23 +411,46 @@ export class AiService {
         'Le proposte non modificano o cancellano prenotazioni. Verifica aperture e disponibilità.',
       ],
       commands,
+      places: job.discovery.places.filter(
+        (p) =>
+          commands.some(
+            (command) => command.action.type === 'add' && command.action.stop.placeId === p.id,
+          ) || routes.some((route) => route.pois.some((poi) => poi.placeId === p.id)),
+      ),
+      sources: job.discovery.sources.filter(
+        (source) =>
+          option.sourceIds.includes(source.id) ||
+          job.discovery.places.some(
+            (p) =>
+              p.sourceIds.includes(source.id) &&
+              (commands.some(
+                (command) => command.action.type === 'add' && command.action.stop.placeId === p.id,
+              ) ||
+                routes.some((route) => route.pois.some((poi) => poi.placeId === p.id))),
+          ),
+      ),
       routes,
       citations: [...citations, ...routes.flatMap((r) => r.citations)].slice(0, 20),
     };
-    const projected = projectAiProposal(trip, proposal);
-    // Every booked activity is protected, including reservations without a slot.
-    for (const reservation of trip.state.reservations.filter((r) => r.status === 'booked')) {
-      const before = trip.plan.steps.find((s) => s.id === reservation.stepId)!;
+    const projected = projectAiProposal(original, proposal);
+    // Check original protected anchors independently of model/manual draft output.
+    for (const before of original.plan.steps.filter(
+      (s) =>
+        original.state.progress[s.id] === 'done' ||
+        original.travel?.locks[s.id] ||
+        (s.kind === 'leg' && s.mode === 'flight') ||
+        original.state.reservations.some((r) => r.stepId === s.id && r.status === 'booked'),
+    )) {
       const after = projected.plan.steps.find((s) => s.id === before.id)!;
       if (
         before.start !== after.start ||
         before.end !== after.end ||
-        trip.plan.days.some((d) => d.stepIds.includes(before.id)) !==
+        original.plan.days.some((d) => d.stepIds.includes(before.id)) !==
           projected.plan.days.some((d) => d.stepIds.includes(before.id))
       )
         throw new AiPlanError(
           'invalid',
-          'La proposta cambierebbe una visita prenotata. Mantieni la prenotazione e modifica le tappe attorno.',
+          'La proposta cambierebbe un’attività completata, prenotata o fissa. Modifica le tappe attorno.',
         );
     }
     return AiProposalSchema.parse({ ...proposal, previewHash: previewHash(projected) });
@@ -390,11 +486,13 @@ export class AiService {
         j.owner = owner;
         j.startedAt = new Date(this.now()).toISOString();
         j.message =
-          j.stage === 'model'
-            ? 'Valuto la giornata e gli orari fissi…'
-            : j.stage === 'routes'
-              ? 'Controllo il percorso e i luoghi lungo la strada…'
-              : 'Preparo il confronto con il programma attuale…';
+          j.stage === 'research'
+            ? 'Cerco luoghi vicini usando solo informazioni pubbliche…'
+            : j.stage === 'model'
+              ? 'Valuto la giornata e gli orari fissi…'
+              : j.stage === 'routes'
+                ? 'Controllo il percorso e i luoghi lungo la strada…'
+                : 'Preparo il confronto con il programma attuale…';
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) return this.get(tripId, id);
@@ -408,11 +506,35 @@ export class AiService {
         delete j.startedAt;
       });
     try {
-      if (job.stage === 'model') {
-        const context = aiContext(
-          job.request.draft ? applyTravel(trip, job.request.draft) : trip,
-          job.request,
+      if (job.stage === 'research') {
+        const draft = job.request.draft ? applyTravel(trip, job.request.draft) : trip;
+        const context = aiContext(draft, job.request);
+        const operation = `${id}-research`;
+        await this.budget.reserve(id, {
+          id: operation,
+          fingerprint: hash({ day: context.day, places: context.places }),
+          maxCost: provider.discoveryBound(),
+        });
+        const discovery = AiDiscoverySchema.parse(
+          await this.budget.dispatch(id, operation, () =>
+            this.bounded((signal) => provider.discover(context, draft, signal)),
+          ),
         );
+        withDiscovery(trip, discovery);
+        await update((j) => {
+          j.discovery = discovery;
+          j.stage = 'model';
+          j.status = 'planning';
+        });
+      } else if (job.stage === 'model') {
+        const enriched = withDiscovery(trip, job.discovery);
+        const context = aiContext(
+          job.request.draft ? applyTravel(enriched, job.request.draft) : enriched,
+          job.request,
+          job.discovery.places.map((p) => p.id),
+        );
+        context.researchNotes = job.discovery.notes;
+        context.conversation = await this.conversation(tripId, job.request, etag);
         const operation = `${id}-model`;
         await this.budget.reserve(id, {
           id: operation,
@@ -420,7 +542,7 @@ export class AiService {
           maxCost: provider.modelBound(context),
         });
         const raw = await this.budget.dispatch(id, operation, () =>
-          this.bounded((signal) => provider.plan(context, signal)),
+          this.bounded((signal) => provider.plan(context, signal, job.id)),
         );
         const output = AiModelOutputSchema.parse(raw);
         job.output = output;
@@ -440,6 +562,8 @@ export class AiService {
         if (output.clarification || !output.options.length) await this.budget.finish(id);
       } else if (job.stage === 'routes') {
         const query = job.queue[job.routeIndex];
+        const enriched = withDiscovery(trip, job.discovery);
+        provider.validateRoute?.(query, enriched);
         const operation = `${id}-route-${job.routeIndex}`;
         await this.budget.reserve(id, {
           id: operation,
@@ -448,13 +572,13 @@ export class AiService {
         });
         const route = AiRouteSchema.parse(
           await this.budget.dispatch(id, operation, () =>
-            this.bounded((signal) => provider.route(query, trip, signal)),
+            this.bounded((signal) => provider.route(query, enriched, signal)),
           ),
         );
         if (
           route.fromPlaceId !== query.fromPlaceId ||
           route.toPlaceId !== query.toPlaceId ||
-          route.pois.some((p) => !query.poiPlaceIds.includes(p.placeId))
+          JSON.stringify(route.pois.map((p) => p.placeId)) !== JSON.stringify(query.poiPlaceIds)
         )
           throw new AiPlanError(
             'invalid',
@@ -486,9 +610,15 @@ export class AiService {
         });
       }
     } catch (error) {
-      const uncertain =
+      let uncertain =
         error instanceof AiBudgetError && ['uncertain', 'pricing'].includes(error.code);
       await this.budget.cancel(id).catch(() => {});
+      try {
+        const run = (await this.budget.read()).ledger.runs.find((run) => run.id === id);
+        uncertain ||= run?.status === 'uncertain';
+      } catch {
+        uncertain = true;
+      }
       await update((j) => {
         j.status = uncertain ? 'uncertain' : 'failed';
         j.message =

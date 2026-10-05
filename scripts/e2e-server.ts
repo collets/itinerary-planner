@@ -9,6 +9,8 @@ import { FileStorage } from '../src/server/storage';
 import { TripService } from '../src/server/service';
 import { hashKey } from '../src/server/auth';
 import { createApp } from '../src/server/app';
+import { AiService } from '../src/server/ai';
+import { MockAiProviders } from '../src/server/ai-providers';
 const directory = await mkdtemp(join(tmpdir(), 'passo-e2e-'));
 process.env.APP_ACCESS_KEY_HASH = hashKey('e2e-access-key');
 process.env.AGENT_API_TOKEN_HASH = hashKey('e2e-agent-token');
@@ -32,7 +34,10 @@ await store.write('rates/pln.json', new TextEncoder().encode(JSON.stringify(rate
 await service.mutate(trip.id, initial.etag, (d) => {
   d.state.exchangeRates = [rate];
 });
-const api = serve({ fetch: createApp(service).fetch, port: 3001, hostname: '127.0.0.1' });
+// Synthetic, network-free AI exercises the production UI without paid calls.
+const ai = new AiService(service, new MockAiProviders());
+await ai.budget.configure(true);
+const api = serve({ fetch: createApp(service, ai).fetch, port: 3001, hostname: '127.0.0.1' });
 const client = await preview({
   preview: {
     port: 5173,

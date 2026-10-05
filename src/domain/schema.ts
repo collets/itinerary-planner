@@ -84,6 +84,32 @@ export const StopSchema = z
     category: z.enum(['visit', 'meal', 'logistics', 'free-time']),
   })
   .strict();
+export const RouteEvidenceSchema = z
+  .object({
+    provider: z.enum(['existing-itinerary', 'openrouteservice', 'mock']),
+    checkedAt: Timestamp,
+    walkingMinutes: z.number().int().min(1).max(720),
+    visitMinutes: z.number().int().min(0).max(360),
+    directMinutes: z.number().int().min(1).max(720),
+    extraWalkingMinutes: z.number().int().min(0).max(120),
+    geometry: z
+      .array(z.tuple([z.number().min(-180).max(180), z.number().min(-90).max(90)]))
+      .max(2000),
+    citations: z
+      .array(
+        z
+          .object({
+            title: z.string().min(1).max(250),
+            url: SafeUrl.optional(),
+            description: z.string().max(1000),
+            checkedAt: Timestamp.optional(),
+            estimate: z.boolean(),
+          })
+          .strict(),
+      )
+      .max(8),
+  })
+  .strict();
 export const LegSchema = z
   .object({
     ...StepBase,
@@ -94,6 +120,7 @@ export const LegSchema = z
     durationMinutes: z.number().int().min(0),
     distanceKm: z.number().min(0).optional(),
     estimate: z.boolean().default(true),
+    routeEvidence: RouteEvidenceSchema.optional(),
     streets: z.array(z.string().max(20000)).max(2000).default([]),
     pois: z
       .array(

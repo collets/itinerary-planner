@@ -407,6 +407,33 @@ function LegDetails({ step }: { step: Extract<Step, { kind: 'leg' }> }) {
           Tempi indicativi. Il percorso suggerito può differire dal più rapido proposto da Maps.
         </p>
       </section>
+      {step.routeEvidence && (
+        <section className="detail-section">
+          <h2>Percorso e verifiche</h2>
+          <p>
+            {step.routeEvidence.walkingMinutes} min a piedi · {step.routeEvidence.visitMinutes} min
+            per le soste
+          </p>
+          <p className="small muted">
+            Percorso diretto: {step.routeEvidence.directMinutes} min · Passeggiata aggiuntiva:{' '}
+            {step.routeEvidence.extraWalkingMinutes} min · Calcolato il{' '}
+            {new Date(step.routeEvidence.checkedAt).toLocaleString('it-IT')}
+          </p>
+          {step.routeEvidence.citations.map((source, i) => (
+            <p className="small" key={i}>
+              {source.url ? (
+                <a className="text-link" href={source.url} target="_blank" rel="noreferrer">
+                  {source.title}
+                </a>
+              ) : (
+                <strong>{source.title}</strong>
+              )}{' '}
+              · {source.description}
+              {source.estimate ? ' · da verificare' : ''}
+            </p>
+          ))}
+        </section>
+      )}
       {step.pois.length > 0 && (
         <section className="detail-section">
           <h2>

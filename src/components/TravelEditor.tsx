@@ -12,6 +12,7 @@ import {
 } from '../domain/travel';
 import { inputToInstant, zonedInput } from '../domain/datetime';
 import { time } from '../domain/trip';
+import { isAiDraftAllowed } from '../domain/ai';
 import { Modal } from './Modal';
 
 export type EditTarget = {
@@ -708,22 +709,20 @@ export function TravelEditor({ target, onClose }: { target: EditTarget; onClose:
         {preview && (
           <>
             <SchedulePreview before={trip} after={preview.trip} />
-            {aiAvailable &&
-              !target.command &&
-              !['undo', 'restore', 'lock', 'note'].includes(preview.command.action.type) && (
-                <button
-                  className="button subtle full"
-                  onClick={() =>
-                    askAi({
-                      dayId: day.id,
-                      ...(step ? { stepId: step.id } : {}),
-                      draft: preview.command,
-                    })
-                  }
-                >
-                  Suggerisci percorso e luoghi
-                </button>
-              )}
+            {aiAvailable && !target.command && isAiDraftAllowed(preview.command, day.id) && (
+              <button
+                className="button subtle full"
+                onClick={() =>
+                  askAi({
+                    dayId: day.id,
+                    ...(step ? { stepId: step.id } : {}),
+                    draft: preview.command,
+                  })
+                }
+              >
+                Suggerisci percorso e luoghi
+              </button>
+            )}
             {preview.command.action.type === 'note' && (
               <p className="travel-note">
                 {preview.command.action.text || 'La nota verrà rimossa.'}

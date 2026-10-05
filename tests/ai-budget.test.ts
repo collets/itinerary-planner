@@ -24,6 +24,69 @@ const reserve = (id = 'operation-one', maxCost = 100_000, runId = 'run-one') =>
   budget.reserve(runId, { id, maxCost, fingerprint: hash(id) });
 
 describe('durable AI spending boundary', () => {
+  it('allows one run and one paid dispatch under a hundred competing service instances', async () => {
+    await budget.configure(true);
+    const instances = Array.from(
+      { length: 100 },
+      () => new AiBudgetService(new FileStorage(directory), () => now),
+    );
+    const starts = await Promise.allSettled(
+      instances.map((instance, index) =>
+        instance.start({
+          id: `burst-${index}`,
+          scope: 'example-trip',
+          requestHash: hash(`burst-${index}`),
+        }),
+      ),
+    );
+    const accepted = starts.filter((result) => result.status === 'fulfilled');
+    expect(accepted).toHaveLength(1);
+    const runId = (accepted[0] as PromiseFulfilledResult<{ id: string }>).value.id;
+    await reserve('burst-operation', 100_000, runId);
+    let calls = 0;
+    const dispatched = await Promise.allSettled(
+      instances.map((instance) =>
+        instance.dispatch(runId, 'burst-operation', async () => {
+          calls++;
+          return { value: true, actualCost: 10_000 };
+        }),
+      ),
+    );
+    expect(dispatched.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(calls).toBe(1);
+    expect(await budget.status()).toMatchObject({ reserved: 0, daily: 10_000, monthly: 10_000 });
+  });
+  it('settles a proven free failed operation without retrying it or blocking later paid work', async () => {
+    await budget.configure(true);
+    await run();
+    await reserve('free-operation', 0);
+    let calls = 0;
+    await expect(
+      budget.dispatch('run-one', 'free-operation', async () => {
+        calls++;
+        throw new Error('Free provider unavailable');
+      }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    await budget.cancel('run-one');
+    expect((await budget.status()).active).toBe(0);
+    await expect(
+      budget.dispatch('run-one', 'free-operation', async () => {
+        calls++;
+        return { value: true, actualCost: 0 };
+      }),
+    ).rejects.toThrow();
+    expect(calls).toBe(1);
+  });
+  it('caps daily job creation durably even for zero-cost requests', async () => {
+    await budget.configure(true);
+    for (let i = 0; i < 60; i++) {
+      await run(`run-${i}`);
+      await budget.finish(`run-${i}`);
+    }
+    await expect(run('run-too-many')).rejects.toMatchObject({ code: 'limit' });
+    now += 24 * 3600_000;
+    await run('run-next-day');
+  });
   it('starts disabled and never dispatches without a reservation', async () => {
     let calls = 0;
     expect((await budget.status()).enabled).toBe(false);

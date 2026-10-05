@@ -28,6 +28,7 @@ import { Overview } from './components/Overview';
 import { Details } from './components/Details';
 import { Wallet } from './components/Wallet';
 import { Preparations } from './components/Preparations';
+import { AiLauncher } from './components/AiLauncher';
 const TicketViewer = lazy(() => import('./components/TicketViewer'));
 
 export default function App() {
@@ -118,15 +119,18 @@ export default function App() {
           <div className="header-right">
             {!online && <WifiOff size={16} aria-label="Senza connessione" />}
             {auth === 'in' ? (
-              <button
-                className="icon-button"
-                onClick={() => {
-                  void signOut();
-                }}
-                aria-label="Esci e cancella copie offline"
-              >
-                <LogOut size={18} />
-              </button>
+              <>
+                <AiLauncher />
+                <button
+                  className="icon-button"
+                  onClick={() => {
+                    void signOut();
+                  }}
+                  aria-label="Esci e cancella copie offline"
+                >
+                  <LogOut size={18} />
+                </button>
+              </>
             ) : (
               <span className="header-tag">Un viaggio alla volta</span>
             )}

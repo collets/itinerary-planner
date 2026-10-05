@@ -8,8 +8,8 @@ const isolated =
   process.env.APP_ENVIRONMENT === 'ai-preview' &&
   process.env.STORAGE_DRIVER === 'blob' &&
   !!process.env.AI_PREVIEW_STORE_ID &&
-  process.env.AI_PREVIEW_STORE_ID.replace(/^store_/, '') ===
-    process.env.BLOB_STORE_ID?.replace(/^store_/, '') &&
+  process.env.AI_PREVIEW_STORE_ID.trim().replace(/^store_/, '') ===
+    process.env.BLOB_STORE_ID?.trim().replace(/^store_/, '') &&
   !process.env.STAGING_SEED &&
   !process.env.BLOB_READ_WRITE_TOKEN;
 console.log(

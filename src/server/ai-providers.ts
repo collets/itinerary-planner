@@ -1,4 +1,4 @@
-import type { AiContext, AiModelOutput, AiRoute } from '../domain/ai.js';
+import type { AiContext, AiModelOutput, AiRoute, AiDiscovery } from '../domain/ai.js';
 import { AiPlanError } from '../domain/ai.js';
 import type { Trip } from '../domain/schema.js';
 
@@ -7,8 +7,11 @@ export type Charged<T> = { value: T; actualCost: number };
 export interface AiProviders {
   mode: 'mock' | 'live';
   modelBound(context: AiContext): number;
-  plan(context: AiContext, signal: AbortSignal): Promise<Charged<AiModelOutput>>;
+  plan(context: AiContext, signal: AbortSignal, requestId?: string): Promise<Charged<unknown>>;
+  discoveryBound(): number;
+  discover(context: AiContext, trip: Trip, signal: AbortSignal): Promise<Charged<AiDiscovery>>;
   routeBound(query: RouteQuery): number;
+  validateRoute?(query: RouteQuery, trip: Trip): void;
   route(query: RouteQuery, trip: Trip, signal: AbortSignal): Promise<Charged<AiRoute>>;
 }
 
@@ -21,6 +24,15 @@ export class MockAiProviders implements AiProviders {
   routeBound() {
     return 0;
   }
+  discoveryBound() {
+    return 0;
+  }
+  async discover(): Promise<Charged<AiDiscovery>> {
+    return {
+      actualCost: 0,
+      value: { places: [], sources: [], notes: ['Demo: nessuna ricerca online.'] },
+    };
+  }
   async plan(context: AiContext): Promise<Charged<AiModelOutput>> {
     const text = context.request.text.toLocaleLowerCase('it');
     const selected =
@@ -32,6 +44,8 @@ export class MockAiProviders implements AiProviders {
       actions.push({
         type: 'delay',
         stepId: selected.id,
+        placeId: null,
+        title: null,
         minutes,
         start: null,
         durationMinutes: null,
@@ -41,6 +55,8 @@ export class MockAiProviders implements AiProviders {
       actions.push({
         type: 'skip',
         stepId: selected.id,
+        placeId: null,
+        title: null,
         minutes: null,
         start: null,
         durationMinutes: null,
@@ -50,6 +66,8 @@ export class MockAiProviders implements AiProviders {
       actions.push({
         type: 'timing',
         stepId: selected.id,
+        placeId: null,
+        title: null,
         minutes: null,
         start: null,
         durationMinutes: minutes,

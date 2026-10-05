@@ -19,7 +19,9 @@
     "test:e2e": "playwright test",
     "trip": "node --import tsx scripts/trip.ts",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "ai:demo": "node --import tsx scripts/ai-demo.ts",
+    "ai:admin": "node --import tsx scripts/ai-admin.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",

@@ -15,6 +15,9 @@ protections, remaining dashboard tasks and mandatory safeguards before paid AI.
 - Installable web app; explicit downloads save itinerary data and selected original tickets to the current device. PDF rendering assets are cached with the app.
 - Original-currency budgets and approximate EUR equivalents using dated ECB rates through Frankfurter, with a 24-hour refresh cache and saved rates available offline.
 - Agent CLI for JSON/YAML import, plan updates, patches, validation, alternatives, tickets and plan history.
+- Optional Italian AI assistant with full-screen conversation, reviewable itinerary/route widgets,
+  protected bookings, explicit approval and offline drafts. Disabled by default; the
+  feature branch includes a free local demo and gated live adapters.
 
 ## Local startup
 
@@ -37,6 +40,16 @@ pnpm test:e2e
 ```
 
 The browser tests use a separate temporary store and the production build, including service-worker offline navigation. Run `pnpm build` before them. `pnpm preview` previews static files only; use `pnpm dev` for the API or the dedicated test server during tests.
+
+## AI feature development
+
+Work is isolated on `feature/ai-assistance`. Run `pnpm ai:demo` for the local,
+network-free example and open the assistant button beside logout. The demo
+preserves local setup; its small synthetic interpreter is not a live LLM.
+See [AI development and owner setup](docs/AI-DEVELOPMENT.md) for implemented scope,
+durable spending limits, operator commands, provider/account prerequisites and
+verification limitations. Paid use and feature-branch Vercel deployment each
+require explicit configuration; no production AI is enabled automatically.
 
 ## Managing trips
 

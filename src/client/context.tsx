@@ -83,7 +83,7 @@ export function ErrorPanel({ message, retry }: { message: string; retry?: () => 
 export function TripShell() {
   const { tripId = '' } = useParams();
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const client = useQueryClient();
   const online = useOnline();
   const query = useQuery({
@@ -148,6 +148,19 @@ export function TripShell() {
   useEffect(() => {
     void db.trips.get(tripId).then((v) => setSavedAt(v?.downloaded ? v.savedAt : null));
   }, [tripId, query.data?.trip.revision, showOffline]);
+  useEffect(() => {
+    if (!query.data || !config.ai?.enabled || new URLSearchParams(search).get('assistant') !== '1')
+      return;
+    const current = currentStep(query.data.trip);
+    const day =
+      query.data.trip.plan.days.find((d) => current && d.stepIds.includes(current.id)) ??
+      query.data.trip.plan.days[0];
+    setEditor(null);
+    setAssistant({ dayId: day.id, generic: true });
+    const params = new URLSearchParams(search);
+    params.delete('assistant');
+    navigate(`${pathname}${params.size ? `?${params}` : ''}`, { replace: true });
+  }, [search, pathname, navigate, query.data, config.ai?.enabled]);
   useEffect(() => {
     const trip = query.data?.trip;
     if (!trip || !online || query.data?.offline) return;
@@ -359,7 +372,14 @@ export function TripShell() {
         </div>
       )}
       {editor && <TravelEditor target={editor} onClose={() => setEditor(null)} />}
-      {assistant && <AiAssistant target={assistant} onClose={() => setAssistant(null)} />}
+      {assistant && (
+        <AiAssistant
+          key={`${trip.id}:${assistant.dayId}:${assistant.stepId ?? ''}:${assistant.draft?.id ?? ''}`}
+          target={assistant}
+          onTarget={setAssistant}
+          onClose={() => setAssistant(null)}
+        />
+      )}
       {showOffline && <OfflineDialog onClose={() => setShowOffline(false)} />}
     </TripContext.Provider>
   );

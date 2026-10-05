@@ -87,6 +87,20 @@ export async function clearPrivateData() {
     },
   );
 }
+/** Bounded advice cache; a late response after logout cannot recreate private data. */
+export async function saveAiAdvice<T extends { savedAt: number }>(id: string, value: T) {
+  await db.transaction('rw', db.meta, async () => {
+    if (!(await db.meta.get('session'))) return;
+    await db.meta.put({ id, value });
+    const advice = await db.meta.where('id').startsWith('ai:').toArray();
+    advice.sort(
+      (a, b) => (a.value as { savedAt: number }).savedAt - (b.value as { savedAt: number }).savedAt,
+    );
+    await db.meta.bulkDelete(
+      advice.slice(0, Math.max(0, advice.length - 10)).map((item) => item.id),
+    );
+  });
+}
 export async function journal(tripId?: string) {
   const pending = tripId
     ? await db.pending.where('tripId').equals(tripId).toArray()

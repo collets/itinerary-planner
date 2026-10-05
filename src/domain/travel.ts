@@ -627,7 +627,14 @@ export function applyTravel(input: Trip, raw: TravelCommand): Trip {
             const start = Date.parse(action.start ?? s.start);
             if (Date.parse(s.start) !== start) s.start = new Date(start).toISOString();
             s.end = new Date(start + duration * 60000).toISOString();
-            if (s.kind === 'leg') s.durationMinutes = duration;
+            if (s.kind === 'leg') {
+              if (s.durationMinutes !== duration && s.routeEvidence) {
+                delete s.routeEvidence;
+                s.estimate = true;
+                s.summary = `Durata adattata: ${duration} min. Stima da verificare.`;
+              }
+              s.durationMinutes = duration;
+            }
             if (action.following) reschedule(trip, d.id, before.plan, index, start);
           }
         }

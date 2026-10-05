@@ -11,6 +11,7 @@ import { TripService } from '../src/server/service';
 import { FileStorage, ApiError, type Storage } from '../src/server/storage';
 import { createApp } from '../src/server/app';
 import { hashKey } from '../src/server/auth';
+import evaluationCases from './fixtures/ai-evaluation.json';
 
 let directory: string, trips: TripService, ai: AiService, providers: MockAiProviders, now: number;
 const request = (id = 'job-one', text = 'Siamo in ritardo di 30 minuti'): AiRequest =>
@@ -38,9 +39,113 @@ async function ready(input = request()) {
 }
 
 describe('AI context, proposals and durable stages', () => {
+  it('rejects forged administrative or cross-day manual drafts before provider dispatch', async () => {
+    const plan = vi.spyOn(providers, 'plan');
+    const current = await trips.read('example-trip');
+    for (const action of [
+      { type: 'lock', dayId: 'day-one', stepId: 'square', fixed: false },
+      { type: 'restore', dayId: 'day-one' },
+      { type: 'note', targetId: 'square', text: 'Private notes do not go to the model' },
+      { type: 'move', dayId: 'day-one', stepId: 'square', toDayId: 'other-day' },
+      {
+        type: 'skip',
+        dayId: 'day-one',
+        stepId: 'square',
+        included: false,
+        acknowledgedBooking: true,
+      },
+    ]) {
+      await expect(
+        ai.create(
+          'example-trip',
+          {
+            ...request(),
+            draft: {
+              id: 'forged-manual-draft',
+              action,
+              routes: [],
+              expected: {},
+              at: new Date().toISOString(),
+            },
+          } as AiRequest,
+          current.etag,
+        ),
+      ).rejects.toThrow();
+    }
+    expect(plan).not.toHaveBeenCalled();
+    expect((await ai.budget.status()).active).toBe(0);
+    expect((await trips.read('example-trip')).etag).toBe(current.etag);
+  });
+  it.each(evaluationCases)(
+    'rejects unsafe intents before any itinerary write: $id',
+    async (scenario) => {
+      const original = await trips.read('example-trip');
+      // Synthetic model output exercises orchestration gates, not real model quality.
+      vi.spyOn(providers, 'plan').mockResolvedValue({
+        actualCost: 0,
+        value: {
+          message: 'Synthetic evaluation',
+          clarification: null,
+          options: [
+            {
+              title: 'Evaluation',
+              explanation: 'Fictional test case',
+              actions: [scenario.action],
+              routes: [],
+              sourceIds: [],
+            },
+          ],
+        },
+      } as unknown as Awaited<ReturnType<MockAiProviders['plan']>>);
+      const job = await ready(request(`job-${scenario.id}`));
+      expect(job.status).toBe(scenario.expected);
+      expect((await trips.read('example-trip')).etag).toBe(original.etag);
+    },
+  );
+  it('passes bounded follow-up history with fresh context and rejects another trip’s conversation', async () => {
+    const first = await ready();
+    const original = await trips.read('example-trip');
+    const proposal = first.proposals[0];
+    await ai.apply('example-trip', proposal.id, proposal.previewHash, original.etag);
+    const plan = vi.spyOn(providers, 'plan');
+    const second = await ready({
+      ...request('follow-up', 'Accorcia la visita a 20 minuti'),
+      parentJobId: first.id,
+    });
+    expect(second.status).toBe('ready');
+    const context = plan.mock.calls[0][0];
+    expect(context.conversation).toHaveLength(1);
+    expect(context.conversation[0]).toMatchObject({
+      request: 'Siamo in ritardo di 30 minuti',
+      previousPlan: true,
+    });
+    expect(context.steps[0].start).toBe('2026-11-12T08:30:00.000Z');
+    await trips.create('another-trip', exampleTrip().plan);
+    const other = await trips.read('another-trip');
+    await expect(
+      ai.create('another-trip', { ...request('wrong-parent'), parentJobId: first.id }, other.etag),
+    ).rejects.toMatchObject({ status: 404 });
+  });
   it('excludes personal names, booking references, tickets and shared notes from provider context', async () => {
     const value = await trips.read('example-trip');
     value.trip.plan.travellers[0].name = 'SECRET_PERSON';
+    value.trip.plan.sources.push(
+      {
+        id: 'private-source',
+        title: 'SECRET_SOURCE',
+        description: 'SECRET_DESCRIPTION',
+        status: 'user_provided',
+        url: 'https://example.com/private?token=SECRET_TOKEN',
+      },
+      {
+        id: 'public-source',
+        title: 'Public museum',
+        description: 'Public information',
+        status: 'verified_official',
+        url: 'https://example.com/museum?token=SECRET_TOKEN#SECRET_FRAGMENT',
+      },
+    );
+    value.trip.plan.steps[0].sourceIds = ['private-source', 'public-source'];
     value.trip.state.reservations.push({
       id: 'booking-one',
       stepId: 'museum',
@@ -76,6 +181,112 @@ describe('AI context, proposals and durable stages', () => {
     const context = JSON.stringify(aiContext(withNotes, request()));
     expect(context).not.toContain('SECRET_');
     expect(context).toContain('"booked":true');
+    expect(context).toContain('https://example.com/museum');
+  });
+  it('adds a discovered place with sourced connections only after approval, and undoes the schedule', async () => {
+    const original = await trips.read('example-trip');
+    vi.spyOn(providers, 'discover').mockResolvedValue({
+      actualCost: 0,
+      value: {
+        places: [
+          {
+            id: 'new-garden',
+            name: 'Giardino di prova',
+            address: 'Borgo Blu',
+            description: 'Fictional evaluation candidate',
+            details: '',
+            trivia: '',
+            entrance: '',
+            openingHours: '',
+            sourceIds: ['garden-source'],
+          },
+        ],
+        sources: [
+          {
+            id: 'garden-source',
+            title: 'Fictional source',
+            description: 'Synthetic test evidence',
+            status: 'verified_secondary',
+          },
+        ],
+        notes: [],
+      },
+    });
+    vi.spyOn(providers, 'plan').mockResolvedValue({
+      actualCost: 0,
+      value: {
+        message: 'Una pausa in più.',
+        clarification: null,
+        options: [
+          {
+            title: 'Una sosta al giardino',
+            explanation: 'Proposta sintetica di prova',
+            actions: [
+              {
+                type: 'add',
+                stepId: null,
+                placeId: 'new-garden',
+                title: 'Pausa al giardino',
+                minutes: null,
+                start: null,
+                durationMinutes: 20,
+                afterId: 'square',
+              },
+            ],
+            routes: [],
+            sourceIds: ['garden-source'],
+          },
+        ],
+      },
+    });
+    vi.spyOn(providers, 'route').mockImplementation(async (query) => ({
+      actualCost: 0,
+      value: {
+        fromPlaceId: query.fromPlaceId,
+        toPlaceId: query.toPlaceId,
+        durationMinutes: 10,
+        streets: ['Strada di prova'],
+        pois: [],
+        estimate: true,
+        provider: 'mock',
+        checkedAt: new Date(now).toISOString(),
+        directMinutes: 10,
+        extraWalkingMinutes: 0,
+        geometry: [],
+        citations: [],
+      },
+    }));
+    const job = await ready(request('add-candidate', 'Aggiungi una pausa in un giardino'));
+    expect(job.status, job.message).toBe('ready');
+    expect((await trips.read('example-trip')).etag).toBe(original.etag);
+    const proposal = job.proposals[0];
+    expect(proposal.places).toHaveLength(1);
+    expect(proposal.routes).toHaveLength(2);
+    const applied = await ai.apply(
+      'example-trip',
+      proposal.id,
+      proposal.previewHash,
+      original.etag,
+    );
+    expect(applied.trip.travel!.history).toHaveLength(1);
+    expect(applied.trip.plan.days[0].stepIds).toHaveLength(5);
+    expect(applied.trip.plan.places.find((p) => p.id === 'new-garden')).toBeDefined();
+    expect(applied.trip.plan.costs).toEqual(original.trip.plan.costs);
+    expect(applied.trip.state.tickets).toEqual(original.trip.state.tickets);
+    const action = { type: 'undo' as const, historyId: proposal.id };
+    const undone = applyTravel(applied.trip, {
+      id: 'undo-add-ai',
+      action,
+      routes: [],
+      expected: preconditions(applied.trip, action),
+      at: new Date(now).toISOString(),
+    });
+    expect(undone.plan.days).toEqual(original.trip.plan.days);
+    expect(
+      undone.plan.steps.filter((step) =>
+        original.trip.plan.steps.some((old) => old.id === step.id),
+      ),
+    ).toEqual(original.trip.plan.steps);
   });
   it('creates a reviewable preview without changing the trip, and applies/undoes the batch atomically', async () => {
     const original = await trips.read('example-trip');
@@ -194,6 +405,7 @@ describe('AI context, proposals and durable stages', () => {
     expect((await ai.advance('example-trip', 'job-one')).status).toBe('cancelled');
     expect(plan).not.toHaveBeenCalled();
     plan.mockImplementation(() => new Promise(() => {}));
+    vi.spyOn(providers, 'modelBound').mockReturnValue(100);
     await ai.create('example-trip', request('job-two'), current.etag);
     expect((await ai.advance('example-trip', 'job-two')).status).toBe('uncertain');
     await ai.advance('example-trip', 'job-two');
@@ -293,7 +505,7 @@ describe('AI API capability separation', () => {
   it('protects every AI route and requires a separate operator credential to alter spending', async () => {
     vi.stubEnv('APP_ACCESS_KEY_HASH', hashKey('family-key'));
     vi.stubEnv('AGENT_API_TOKEN_HASH', hashKey('agent-key'));
-    vi.stubEnv('AI_ADMIN_TOKEN_HASH', hashKey('operator-key'));
+    vi.stubEnv('AI_ADMIN_TOKEN_HASH', hashKey('operator-key-independent-and-long-enough'));
     vi.stubEnv('SESSION_SECRET', 'test-secret-more-than-thirty-two-characters');
     const app = createApp(trips, ai);
     const paths = [
@@ -312,13 +524,20 @@ describe('AI API capability separation', () => {
       });
     expect((await admin('agent-key')).status).toBe(401);
     expect((await admin('family-key')).status).toBe(401);
-    expect((await admin('operator-key', { enabled: false, model: 'changed' })).status).toBe(422);
-    expect((await admin('operator-key')).status).toBe(200);
+    expect(
+      (
+        await admin('operator-key-independent-and-long-enough', {
+          enabled: false,
+          model: 'changed',
+        })
+      ).status,
+    ).toBe(422);
+    expect((await admin('operator-key-independent-and-long-enough')).status).toBe(200);
     expect((await ai.budget.status()).enabled).toBe(false);
     expect(
       (
         await app.request('http://localhost/api/v2/trips', {
-          headers: { Authorization: 'Bearer operator-key' },
+          headers: { Authorization: 'Bearer operator-key-independent-and-long-enough' },
         })
       ).status,
     ).toBe(401);

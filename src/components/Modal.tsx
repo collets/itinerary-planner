@@ -53,10 +53,12 @@ export function Modal({
   title,
   children,
   onClose,
+  fullScreen = false,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  fullScreen?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null),
     titleRef = useRef<HTMLHeadingElement>(null),
@@ -74,7 +76,7 @@ export function Modal({
   return (
     <dialog
       ref={ref}
-      className="modal"
+      className={fullScreen ? 'modal modal-fullscreen' : 'modal'}
       aria-labelledby={id}
       onCancel={(e) => {
         e.preventDefault();

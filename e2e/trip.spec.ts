@@ -53,6 +53,133 @@ const activeSection = async (page: Page, name: string) => {
     navigation.getByRole(name === 'Adesso' ? 'button' : 'link', { name, exact: true }),
   ).toHaveAttribute('aria-current', 'page');
 };
+test('AI chat previews, confirms and continues a conversation without implicit writes', async ({
+  page,
+  request,
+  context,
+  browserName,
+}) => {
+  await login(page);
+  const headers = { Authorization: 'Bearer e2e-agent-token' };
+  const read = async () => (await request.get('/api/v2/trips/example-trip', { headers })).json();
+  const before = await read();
+  const launcher = page.getByRole('button', { name: 'Apri assistente di viaggio' });
+  await expect(launcher).toBeVisible();
+  await launcher.click();
+  const dialog = page.getByRole('dialog', { name: 'Assistente di viaggio' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Assistente di viaggio' })).toBeFocused();
+  const viewport = page.viewportSize()!;
+  expect(await dialog.boundingBox()).toEqual({ x: 0, y: 0, ...viewport });
+  const input = dialog.getByRole('textbox', { name: 'Richiesta di assistenza' });
+  await input.fill('Siamo in ritardo di 30 minuti');
+  await dialog.getByRole('button', { name: 'Invia richiesta', exact: true }).click();
+  const apply = dialog.getByRole('button', { name: 'Applica questa proposta', exact: true });
+  await expect(apply).toBeEnabled();
+  expect((await read()).etag).toBe(before.etag);
+  await expect(dialog.getByRole('heading', { name: 'Anteprima del programma' })).toBeVisible();
+  await apply.click();
+  await expect(dialog.getByRole('status')).toHaveText('Proposta applicata al programma condiviso.');
+  await expect(apply).toBeDisabled();
+  const applied = await read();
+  expect(applied.trip.travel.history).toHaveLength(1);
+  expect(
+    Date.parse(applied.trip.plan.steps[0].start) - Date.parse(before.trip.plan.steps[0].start),
+  ).toBe(30 * 60000);
+  await input.fill('Accorcia la visita a 20 minuti');
+  await dialog.getByRole('button', { name: 'Invia richiesta', exact: true }).click();
+  await expect(apply).toBeEnabled();
+  await expect(dialog.getByText('Siamo in ritardo di 30 minuti', { exact: true })).toBeVisible();
+  expect((await read()).etag).toBe(applied.etag);
+  const fits = await dialog.evaluate((element) => {
+    const conversation = element.querySelector('.ai-conversation')!;
+    return (
+      element.scrollWidth <= element.clientWidth &&
+      conversation.scrollWidth <= conversation.clientWidth
+    );
+  });
+  expect(fits).toBe(true);
+  await dialog.getByRole('button', { name: 'Chiudi', exact: true }).click();
+  await launcher.click();
+  await expect(dialog.getByText('Accorcia la visita a 20 minuti', { exact: true })).toBeVisible();
+  await expect(apply).toBeEnabled();
+  await connection(true, browserName, context, request);
+  if (browserName === 'webkit')
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false });
+      window.dispatchEvent(new Event('offline'));
+    });
+  await expect(dialog.getByRole('button', { name: 'Invia richiesta' })).toBeDisabled();
+  await input.fill('Bozza offline da inviare più tardi');
+  const meta = () =>
+    page.evaluate(
+      () =>
+        new Promise<Array<{ id: string; value: { text?: string } }>>((resolve, reject) => {
+          const opened = indexedDB.open('passo-private-data');
+          opened.onerror = () => reject(new Error('Cannot read private test cache'));
+          opened.onsuccess = () => {
+            const database = opened.result;
+            const entries = database.transaction('meta').objectStore('meta').getAll();
+            entries.onsuccess = () => {
+              database.close();
+              resolve(entries.result);
+            };
+            entries.onerror = () => {
+              database.close();
+              reject(new Error('Cannot read private test cache'));
+            };
+          };
+        }),
+    );
+  await expect
+    .poll(async () => (await meta()).find((entry) => entry.id.startsWith('ai:'))?.value.text)
+    .toBe('Bozza offline da inviare più tardi');
+  await dialog.getByRole('button', { name: 'Chiudi', exact: true }).click();
+  await launcher.click();
+  await expect(input).toHaveValue('Bozza offline da inviare più tardi');
+  await expect(apply).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Chiudi', exact: true }).click();
+  await connection(false, browserName, context, request);
+  if (browserName === 'webkit')
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => true });
+      window.dispatchEvent(new Event('online'));
+    });
+  expect((await read()).etag).toBe(applied.etag);
+  await page.getByRole('button', { name: 'Esci e cancella copie offline' }).click();
+  await expect(page.getByRole('button', { name: 'Apri i tuoi viaggi' })).toBeVisible();
+  expect((await meta()).some((entry) => entry.id.startsWith('ai:'))).toBe(false);
+});
+
+test('AI route assistance includes the manual draft in one approval', async ({ page, request }) => {
+  await login(page);
+  const headers = { Authorization: 'Bearer e2e-agent-token' };
+  const before = await (await request.get('/api/v2/trips/example-trip', { headers })).json();
+  await page.getByRole('button', { name: 'Adatta La piazza del borgo', exact: true }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: /Mostra anteprima/ }).click();
+  await dialog.getByRole('button', { name: 'Suggerisci percorso e luoghi' }).click();
+  dialog = page.getByRole('dialog', { name: 'Assistente di viaggio' });
+  await expect(dialog.getByText(/La modifica in anteprima è inclusa/)).toBeVisible();
+  await dialog.getByRole('button', { name: 'Invia richiesta' }).click();
+  const apply = dialog.getByRole('button', { name: 'Applica questa proposta', exact: true });
+  await expect(apply).toBeEnabled();
+  await expect(dialog.getByText('Giardino segreto', { exact: true })).toBeVisible();
+  expect((await (await request.get('/api/v2/trips/example-trip', { headers })).json()).etag).toBe(
+    before.etag,
+  );
+  await apply.click();
+  await expect(dialog.getByRole('status')).toHaveText('Proposta applicata al programma condiviso.');
+  await expect(apply).toBeDisabled();
+  const after = await (await request.get('/api/v2/trips/example-trip', { headers })).json();
+  expect(after.trip.travel.history).toHaveLength(1);
+  expect(
+    Date.parse(after.trip.plan.steps[0].start) - Date.parse(before.trip.plan.steps[0].start),
+  ).toBe(15 * 60000);
+  const walk = after.trip.plan.steps.find((step: { id: string }) => step.id === 'walk');
+  expect(walk.routeEvidence.provider).toBe('mock');
+  await dialog.getByRole('button', { name: 'Chiudi', exact: true }).click();
+});
 test('blocks injected scripts and unexpected outbound requests with the deployed CSP', async ({
   page,
 }) => {

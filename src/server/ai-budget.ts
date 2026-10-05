@@ -126,7 +126,7 @@ export class AiBudgetService {
     execute: () => Promise<{ value: T; actualCost: number }>,
   ) {
     const owner = randomUUID();
-    await this.claim(runId, operationId, owner);
+    const operation = await this.claim(runId, operationId, owner);
     // A disable after the CAS claim stops the call when observed. Calls already
     // accepted by the provider cannot be recalled or assumed unbilled.
     if (!(await this.read()).ledger.enabled) {
@@ -137,6 +137,15 @@ export class AiBudgetService {
     try {
       result = await execute();
     } catch {
+      if (operation.maxCost === 0) {
+        // A verified free provider cannot create a monetary liability. Keep its
+        // exactly-once claim settled, and do not retry the failed operation.
+        await this.settle(runId, operationId, owner, 0);
+        throw new AiBudgetError(
+          'conflict',
+          'Il fornitore gratuito non ha completato la richiesta. Il programma resta invariato.',
+        );
+      }
       await this.settle(runId, operationId, owner).catch(() => {});
       throw new AiBudgetError(
         'uncertain',

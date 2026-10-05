@@ -70,3 +70,46 @@ Authenticated browser sessions and agent tokens can access:
 The command body is `{id, action, routes, expected, at}`. `id` is a unique stable UUID for retries; `at` is an ISO instant. See [DATA.md](DATA.md) for action shapes. Use `preconditions(trip, action)` from `src/domain/travel.ts` to construct `expected`, whose canonical fingerprints cover the involved day(s), active/archived steps, progress, manual locks, booked slots and baseline membership, or just the involved shared note. Independently changed notes/days can merge; a same-day change returns **409**. All applies require the current `X-Trip-Version` and storage CAS (**412** on a competing commit). A retry of an acknowledged command returns the current document without applying it again, even when its old version is stale. Validation/anchor conflicts return **422**. Browser writes require a same-origin `Origin` and the private session; raw plan editing remains agent-only.
 
 `GET /api/v2/config` includes `editing` and `staging`. Setting server `TRAVEL_EDITING_ENABLED=false` rejects travel writes/previews while retaining V2 reads, tickets and existing operational controls. No database migration or data reset is required.
+
+## Optional AI assistance (V2 only)
+
+`GET /api/v2/config` also returns `ai: {enabled, mode}` where mode is `off`, `mock`
+or `live`. AI is disabled unless both provider configuration and the independent
+durable ledger allow it. Existing browser sessions/agent tokens can use:
+
+| Method | Path under `/api/v2/trips/{id}/ai` | Behavior                                                                                         |
+| ------ | ---------------------------------- | ------------------------------------------------------------------------------------------------ |
+| POST   | `/requests`                        | `{id, dayId, stepId?, parentJobId?, text, preference?, draft?}`; current X-Trip-Version required |
+| GET    | `/requests/{jobId}`                | Status, Italian message and validated proposals; read only                                       |
+| POST   | `/requests/{jobId}/advance`        | One claimed/reserved stage; `{}` body; no automatic provider retries                             |
+| POST   | `/requests/{jobId}/cancel`         | Stop future work; dispatched liabilities remain held                                             |
+| POST   | `/proposals/{proposalId}/apply`    | `{previewHash}` plus current X-Trip-Version; exact proposal approval and one atomic write        |
+
+Use a stable unique request ID for network retries. Create is idempotent only for
+the same payload, trip and original version; different payloads with the same ID
+return 409. `preference` is `fastest` (default) or `scenic`. The text is 1–2,000
+characters; a parent job must belong to the same trip/day and be terminal. Draft
+is a validated TravelCommand, not a saved itinerary edit. Only flexible same-day
+delay/timing/skip/move/add drafts are accepted; lock, restore, undo, shared notes,
+actual-departure overrides and booking acknowledgments cannot enter this API.
+Reading a job never
+spends money. Unknown charges return an uncertain status requiring operator
+verification; polling or lease expiry cannot trigger a repeat dispatch.
+
+Proposal objects contain stable IDs, base version, 30-minute expiry, a preview
+hash, typed commands, optional discovered catalog entries, route evidence and
+citations. Inspect them in the job response. Apply rejects modified/stale/expired
+proposals and revalidates all protected anchors. Repeated apply returns the
+current committed trip even if the original version is stale. V1 access returns
+426; disabled travel editing rejects AI mutations too. Offline drafts/advice are
+local only, not jobs automatically purchased after reconnection.
+
+`/api/v2/ai/admin/status` (GET), `/configure` (POST `{enabled, limits?}`) and
+`/reconcile` (POST `{runId, operationId, actualCost, evidence}`) require an
+independent bearer matching `AI_ADMIN_TOKEN_HASH`. Family cookies and itinerary
+agent tokens are rejected, and this operator bearer cannot access ordinary trip
+routes. Limits are `{monthly,daily,request,operations}` in integer microdollars;
+reconciliation requires provider evidence. See [AI operation](AI-DEVELOPMENT.md)
+for safe setup, the CLI, kill switch, retention and owner-only live gates.
+The authenticated OpenAPI document includes AI request/proposal schemas and
+operator security requirements.

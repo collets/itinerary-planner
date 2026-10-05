@@ -251,11 +251,12 @@ of the caller's identity and prompts.
    Reject/reconcile ambiguous jobs instead of blindly redispatching them.
 5. **Provider-side ceiling and key restrictions.** Use a dedicated project/service
    account with restricted inference permissions and model access. Verify a real
-   enforced provider spending limit where available. OpenAI now documents hard
-   organization spend limits; those limits use monthly USD
-   thresholds in cents and return an enforcement state. Check that state in the
+   enforced provider spending limit where available. OpenAI documents hard
+   organization/project spend limits. Verify **Enforce a hard limit** in the
    actual account. Spend **alerts** alone do not enforce a cap. Keep administration
    credentials outside the application and restrict production/preview separately.
+   Enforcement can lag and slightly exceed the configured threshold.
+   [OpenAI spending guide](https://developers.openai.com/api/docs/guides/spend-limits),
    [OpenAI hard spend limit](https://developers.openai.com/api/reference/cli/resources/admin/subresources/organization/subresources/spend_limit/methods/update),
    [OpenAI spend controls](https://developers.openai.com/api/docs/guides/terraform/rate-limits-and-spend).
 6. **Emergency stop.** A durable server-owned kill switch checked before each paid
@@ -317,6 +318,18 @@ provider tests block service workers to ensure WebKit routes the mocked API
 exchange consistently; the separate offline tests retain service workers.
 Edge firewall verification and future AI budget controls remain explicit launch
 gates, not completed protections.
+
+### AI feature branch follow-up
+
+`feature/ai-assistance` now implements a private conditional-write spending
+ledger, independent operator capability, bounded context/providers, protected
+atomic approvals, a daily request ceiling and a kill switch. Mock regression
+tests include 100 competing service instances and storage/timeout/rollover abuse
+scenarios. This is additional application verification, not proof of live billing
+enforcement or an independent penetration test. The earlier production audit
+record above remains historical. Provider setup, isolated AI preview configuration,
+account controls and measured live evaluation remain required before paid use;
+see [AI development and operation](AI-DEVELOPMENT.md).
 
 ## References
 

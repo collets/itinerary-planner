@@ -34,6 +34,11 @@ and the [security requirements](SECURITY-AUDIT.md#mandatory-design-before-paid-a
 
 ## First release
 
+Implementation status and owner gates are recorded in
+[AI-DEVELOPMENT.md](AI-DEVELOPMENT.md). Milestones 1–3 are implemented with mocked
+verification; account configuration and bounded real-provider evaluation remain
+milestone 4. Live operation is disabled by default.
+
 Two entry points share the same proposal engine:
 
 1. **Inside Adatta:** `Suggerisci percorso e luoghi` for affected connections.
@@ -42,6 +47,9 @@ Two entry points share the same proposal engine:
 2. **Day assistance:** `Chiedi aiuto` accepts an Italian request such as
    “Siamo in ritardo di 40 minuti; mantieni la visita prenotata.” It produces
    up to two coordinated proposals, with an explanation and schedule comparison.
+   A header button before logout opens the same full-screen hybrid conversation,
+   with a day selector, preference widget, proposal cards and persistent composer.
+   Follow-up messages receive bounded prior turns and the current shared plan.
 
 Every proposal is reviewed with `Applica queste modifiche`. The model cannot
 apply a plan, change a booking, buy tickets or alter spending controls. Replies
@@ -81,6 +89,9 @@ Provider interfaces:
 First routing candidate is openrouteservice. Its actual account quotas, local
 entrance quality, attribution and offline storage terms must be checked before
 live use. Research is independently budgeted; model memory is not route evidence.
+The implemented research pilot only discovers nearby Wikipedia candidates and
+labels opening/access information as unknown. General official-source/web lookup
+remains deferred until its request, response and billing bounds are established.
 
 ### Records and endpoints
 
@@ -105,10 +116,10 @@ Proposed authenticated routes under `/api/v2/trips/:id/ai`:
 | `GET /requests/:requestId`          | Read progress; never starts paid work                        |
 | `POST /requests/:requestId/advance` | Advance one safely claimed, budgeted stage                   |
 | `POST /requests/:requestId/cancel`  | Stop future stages without releasing uncertain charges       |
-| `GET /proposals/:proposalId`        | Read a validated proposal and its stale status               |
 | `POST /proposals/:proposalId/apply` | Confirm the exact proposal and atomically apply it           |
 
-Names are provisional. Reuse authentication, same-origin checks, streamed body
+The implemented job GET includes its validated proposals; see [API.md](API.md)
+for exact contracts. Reuse authentication, same-origin checks, streamed body
 limits, UUIDs and ETags. Read the actual trip before generation and application.
 Pending offline edits must sync or be explicitly resolved before generating from
 the shared plan. Tool inputs cannot select another credential, store or workspace.
@@ -149,8 +160,10 @@ These are maximum allowances, not a target bill or a guaranteed account feature.
    reasoning tokens, hosted tools and routing charges. Unknown prices, unsupported
    billing bounds, exhausted limits or unavailable storage must reject dispatch.
 3. Bound context, conversation history, tool output, model rounds, output tokens,
-   searches, route calls and elapsed time. Start with at most three model rounds,
-   two searches and six route calls; tighten these after measured evaluations.
+   searches, route calls and elapsed time. The implemented pilot uses one model
+   round, two Wikipedia HTTP calls and six logical routes (up to five bounded
+   directions calls per route), with a durable 60-run daily ceiling. Review these
+   after measured evaluations.
 4. A typical-cost estimate is not a hard bound. Hosted search may introduce input
    tokens outside the locally constructed prompt. Verify an enforceable upper
    bound and reserve it; otherwise keep that adapter disabled or use a separately
@@ -276,5 +289,6 @@ Recommended initial choices: walking first, explicit assistance actions, reviewe
 atomic application, online application of AI proposals, and the provisional small
 spending limits above. Provider/model selection follows account checks and evals.
 
-The next implementation slice after review is milestone 1, followed immediately
-by a mocked mobile workflow. No paid setup is needed while building those slices.
+Milestones 1–3 now have an implementation and mocked verification. The next slice
+is the owner account/isolation checklist and a separately approved bounded live
+evaluation in [AI-DEVELOPMENT.md](AI-DEVELOPMENT.md). Production AI remains off.

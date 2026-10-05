@@ -4,6 +4,25 @@ Catalogs and text fields have resource limits in `src/domain/schema.ts`, and pla
 requests have a 512 KiB body limit. See [Security audit](SECURITY-AUDIT.md) for the
 specific limits. Split unusually large imports into smaller trips.
 
+## Optional AI route evidence
+
+Walking legs may include `routeEvidence`: provider (`existing-itinerary`,
+`openrouteservice`, or `mock`), checkedAt, walkingMinutes, visitMinutes,
+directMinutes, extraWalkingMinutes, bounded GeoJSON-order `[longitude,latitude]`
+geometry and attributed citations. `pois[].visitMinutes` is an optional estimated
+pause allowance, separate from extra walking. Leg duration includes pauses when
+approved through AI. Changing a leg's duration manually invalidates its previous
+evidence and labels its new duration as an estimate. Existing manual itineraries
+remain valid without these optional fields.
+
+AI jobs, conversations, proposals and spending records are **not trip schema**.
+They live in independent private storage and cannot be edited through plan
+patches, itinerary agents, undo or restore. Use the authenticated AI API and
+separate operator interface documented in [API.md](API.md) and
+[AI-DEVELOPMENT.md](AI-DEVELOPMENT.md). Keep exported questions/evaluation data in
+ignored `local-data/`. Approvals preserve bookings, tickets and existing IDs;
+do not copy generated evidence into a real trip without verifying its source.
+
 ## Agent workflow
 
 1. Read this document and `src/domain/schema.ts`; obtain the authenticated `/api/v1/openapi.json` or `pnpm trip schema local-data/schema.json`.

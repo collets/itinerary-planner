@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { Sparkles, Route, ArrowUpRight } from 'lucide-react';
 import { useTrip } from '../client/context';
 import { request, fetchTrip, syncPending, type TripResult } from '../client/api';
-import { db, journal } from '../client/db';
+import { db, journal, saveAiAdvice } from '../client/db';
 import { projectAiProposal, type AiRequest, type AiProposal } from '../domain/ai';
 import type { TravelCommand } from '../domain/travel';
 import type { AiJobView } from '../server/ai';
 import { Modal } from './Modal';
 import { SchedulePreview } from './TravelEditor';
 
-export type AiTarget = { dayId: string; stepId?: string; draft?: TravelCommand };
+export type AiTarget = { dayId: string; stepId?: string; draft?: TravelCommand; generic?: boolean };
 type SavedAdvice = {
   text: string;
   preference: 'fastest' | 'scenic';
@@ -17,16 +17,27 @@ type SavedAdvice = {
   baseEtag?: string;
   job?: AiJobView;
   savedAt: number;
+  draft?: TravelCommand;
+  turns?: Array<{ text: string; job: AiJobView }>;
 };
 const pending = new Set(['queued', 'running', 'planning', 'routing']);
 
-export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: () => void }) {
+export function AiAssistant({
+  target,
+  onTarget,
+  onClose,
+}: {
+  target: AiTarget;
+  onTarget: (target: AiTarget) => void;
+  onClose: () => void;
+}) {
   const { trip, etag, online, refresh, notify, aiMode } = useTrip();
   const [text, setText] = useState(
     target.draft
       ? 'Suggerisci il percorso migliore e i luoghi lungo la strada dopo questa modifica.'
       : '',
   );
+  const [draft, setDraft] = useState(target.draft);
   const [preference, setPreference] = useState<'fastest' | 'scenic'>('fastest');
   const [saved, setSaved] = useState<SavedAdvice | undefined>();
   const [job, setJob] = useState<AiJobView | undefined>();
@@ -34,10 +45,10 @@ export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: ()
     [busy, setBusy] = useState(false),
     [loaded, setLoaded] = useState(false);
   const alive = useRef(true),
-    stop = useRef(false);
+    stop = useRef(false),
+    activity = useRef(0);
   const key = `ai:${trip.id}:${target.dayId}:${target.stepId ?? 'day'}`;
   const endpoint = `/trips/${trip.id}/ai`;
-  const day = trip.plan.days.find((d) => d.id === target.dayId);
   useEffect(() => {
     alive.current = true;
     void db.meta
@@ -50,6 +61,25 @@ export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: ()
           setJob(cached.job);
           setText(cached.text);
           setPreference(cached.preference);
+          setDraft(cached.draft);
+          if (navigator.onLine && cached.request) {
+            const version = activity.current;
+            void request<AiJobView>(`${endpoint}/requests/${cached.request.id}`)
+              .then((current) => {
+                if (alive.current && activity.current === version) {
+                  if (current.status === 'applied') setDraft(undefined);
+                  void remember({
+                    ...cached,
+                    draft: current.status === 'applied' ? undefined : cached.draft,
+                    job: current,
+                    savedAt: Date.now(),
+                  });
+                }
+              })
+              .catch(() => {
+                /* The cached conversation remains readable offline. */
+              });
+          }
         }
         setLoaded(true);
       })
@@ -68,15 +98,17 @@ export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: ()
     if (!loaded) return;
     const timer = setTimeout(() => {
       if (alive.current)
-        void db.meta
-          .put({ id: key, value: { ...saved, text, preference, savedAt: Date.now() } })
-          .catch(() => setError('La bozza non è stata salvata sul telefono.'));
+        void saveAiAdvice(key, { ...saved, text, preference, draft, savedAt: Date.now() }).catch(
+          () => {
+            if (alive.current) setError('La bozza non è stata salvata sul telefono.');
+          },
+        );
     }, 350);
     return () => clearTimeout(timer);
-  }, [text, preference, loaded, key, saved]);
+  }, [text, preference, loaded, key, saved, draft]);
   const remember = async (value: SavedAdvice) => {
     if (!alive.current) return;
-    await db.meta.put({ id: key, value });
+    await saveAiAdvice(key, value);
     if (alive.current) {
       setSaved(value);
       setJob(value.job);
@@ -103,11 +135,13 @@ export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: ()
           'POST',
           {},
         );
+      if (stop.current || !alive.current) break;
       await remember({ ...value, job: current, savedAt: Date.now() });
     }
   };
   const generate = async (resume = false) => {
     if (!online || busy) return;
+    activity.current++;
     setBusy(true);
     setError('');
     stop.current = false;
@@ -122,19 +156,26 @@ export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: ()
           throw new Error('Riprendi o annulla la richiesta in corso prima di crearne un’altra.');
         const fresh = await fetchTrip(trip.id);
         value = {
-          text,
+          text: '',
           preference,
+          draft,
+          turns: [
+            ...(saved?.turns ?? []),
+            ...(job && saved?.request ? [{ text: saved.request.text, job }] : []),
+          ].slice(-3),
           request: {
             id: crypto.randomUUID(),
             dayId: target.dayId,
+            ...(job ? { parentJobId: job.id } : {}),
             ...(target.stepId ? { stepId: target.stepId } : {}),
             text,
             preference,
-            ...(target.draft ? { draft: target.draft } : {}),
+            ...(draft ? { draft } : {}),
           },
           baseEtag: fresh.etag,
           savedAt: Date.now(),
         };
+        setText('');
         await remember(value);
       }
       const current = await request<AiJobView>(
@@ -151,6 +192,7 @@ export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: ()
     }
   };
   const cancel = async () => {
+    activity.current++;
     stop.current = true;
     if (!saved?.request || !online) return;
     try {
@@ -166,6 +208,7 @@ export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: ()
   };
   const apply = async (proposal: AiProposal) => {
     if (!online || busy) return;
+    activity.current++;
     setBusy(true);
     setError('');
     try {
@@ -185,6 +228,7 @@ export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: ()
         if (saved && job)
           await remember({
             ...saved,
+            draft: undefined,
             job: {
               ...job,
               status: 'applied',
@@ -192,6 +236,7 @@ export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: ()
             },
             savedAt: Date.now(),
           });
+        setDraft(undefined);
         await refresh();
         notify('Proposta applicata. Puoi annullarla dalla cronologia.');
       }
@@ -206,122 +251,190 @@ export function AiAssistant({ target, onClose }: { target: AiTarget; onClose: ()
       if (alive.current) setBusy(false);
     }
   };
+  const resetConversation = async () => {
+    if (busy || (job && pending.has(job.status))) return;
+    activity.current++;
+    setJob(undefined);
+    setText('');
+    setDraft(undefined);
+    setError('');
+    await remember({ text: '', preference, savedAt: Date.now() });
+  };
   return (
-    <Modal title={`Chiedi aiuto · ${day?.title ?? 'Viaggio'}`} onClose={onClose}>
+    <Modal title="Assistente di viaggio" fullScreen onClose={onClose}>
       <div className="ai-assistant">
-        <div className="ai-intro">
-          <Sparkles size={22} />
-          <p>
-            Rivediamo la giornata insieme. Nessuna modifica viene salvata finché non confermi una
-            proposta.
-          </p>
-        </div>
-        {aiMode === 'mock' && (
-          <p className="warning-note">
-            Demo senza costi: nessuna chiamata AI o ricerca online. Usa “Siamo in ritardo di 30
-            minuti” o chiedi di rivedere i percorsi.
-          </p>
-        )}
-        {!online && (
-          <p className="warning-note">
-            Sei offline. Puoi scrivere una bozza e leggere i consigli salvati. Generazione e
-            conferma richiedono una connessione.
-          </p>
-        )}
-        {target.draft && (
-          <p className="travel-note">
-            La modifica in anteprima è inclusa nella richiesta e verrà salvata insieme alla
-            proposta, solo dopo la conferma.
-          </p>
-        )}
-        <label>
-          Cosa vuoi cambiare?
-          <textarea
-            aria-label="Richiesta di assistenza"
-            rows={4}
-            maxLength={2000}
-            value={text}
-            disabled={busy}
-            placeholder="Siamo in ritardo di 30 minuti. Come adattiamo il pomeriggio?"
-            onChange={(e) => setText(e.target.value)}
-          />
-        </label>
-        <label>
-          La passeggiata
-          <select
-            value={preference}
-            disabled={busy}
-            onChange={(e) => setPreference(e.target.value as typeof preference)}
-          >
-            <option value="fastest">Il percorso più rapido</option>
-            <option value="scenic">Con luoghi interessanti lungo la strada</option>
-          </select>
-        </label>
-        <button
-          className="button full"
-          disabled={
-            !loaded || !online || busy || !text.trim() || (!!job && pending.has(job.status))
-          }
-          onClick={() => void generate()}
-        >
-          <Sparkles size={17} />
-          {busy ? 'Valutazione in corso…' : 'Prepara una proposta'}
-        </button>
-        {saved?.request && (!job || pending.has(job.status)) && (
-          <button
-            className="button subtle full"
-            disabled={!online || busy}
-            onClick={() => void generate(true)}
-          >
-            Riprendi la richiesta salvata
-          </button>
-        )}
-        {(busy || (!!job && pending.has(job.status))) && (
-          <button className="button subtle full" disabled={!online} onClick={() => void cancel()}>
-            Annulla richiesta
-          </button>
-        )}
-        {error && (
-          <p className="error-note" role="alert">
-            {error}
-          </p>
-        )}
-        {job && (
-          <section className="ai-advice" aria-live="polite">
-            <p className="small muted">
-              Consiglio salvato · {new Date(saved?.savedAt ?? Date.now()).toLocaleString('it-IT')}
+        <div className="ai-conversation">
+          <div className="ai-intro">
+            <Sparkles size={22} />
+            <p>
+              Rivediamo il viaggio insieme. Scrivi cosa vorresti cambiare, poi confrontiamo le
+              proposte prima di salvare.
             </p>
-            <p role="status">{job.message}</p>
-            {job.proposals.map((proposal) => (
-              <Proposal
-                key={proposal.id}
-                proposal={proposal}
-                available={
-                  online &&
-                  job.status === 'ready' &&
-                  proposal.baseEtag === etag &&
-                  Date.parse(proposal.expiresAt) > Date.now()
-                }
-                busy={busy}
-                onApply={() => void apply(proposal)}
-              />
-            ))}
-            {job.status === 'uncertain' && (
-              <p className="warning-note">
-                Questa richiesta non viene ripetuta automaticamente. Serve una verifica della spesa
-                da parte dell’operatore.
+          </div>
+          <section className="ai-context-widget" aria-label="Contesto della conversazione">
+            <strong>{trip.plan.title}</strong>
+            <label>
+              Giornata
+              <select
+                aria-label="Giornata da rivedere"
+                value={target.dayId}
+                disabled={busy || !!draft || (!!job && pending.has(job.status))}
+                onChange={(e) => onTarget({ dayId: e.target.value, generic: true })}
+              >
+                {trip.plan.days.map((day) => (
+                  <option value={day.id} key={day.id}>
+                    {day.date} · {day.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {target.stepId && (
+              <p className="small">
+                Tappa: {trip.plan.steps.find((step) => step.id === target.stepId)?.title}
               </p>
             )}
+            <label>
+              La passeggiata
+              <select
+                value={preference}
+                disabled={busy}
+                onChange={(e) => setPreference(e.target.value as typeof preference)}
+              >
+                <option value="fastest">Il percorso più rapido</option>
+                <option value="scenic">Con luoghi interessanti lungo la strada</option>
+              </select>
+            </label>
           </section>
-        )}
-        <p className="small muted">
-          Le risposte possono contenere errori. Prenotazioni, attività completate e orari fissi
-          restano protetti. La bozza non viene inviata automaticamente quando torna la connessione.
-        </p>
+          {aiMode === 'mock' && (
+            <p className="warning-note">
+              Demo senza costi: nessuna chiamata AI o ricerca online. Prova “Siamo in ritardo di 30
+              minuti”.
+            </p>
+          )}
+          {!online && (
+            <p className="warning-note">
+              Sei offline. Puoi scrivere una bozza e leggere i consigli salvati. Generazione e
+              conferma richiedono una connessione.
+            </p>
+          )}
+          {draft && (
+            <p className="travel-note">
+              La modifica in anteprima è inclusa nella richiesta. Verrà salvata insieme alla
+              proposta solo dopo la conferma.
+            </p>
+          )}
+          {saved?.turns?.map((turn) => (
+            <section className="ai-chat-turn" key={turn.job.id}>
+              <p className="ai-message ai-message-user">{turn.text}</p>
+              <div className="ai-message ai-message-assistant">
+                <p>{turn.job.message}</p>
+                {turn.job.proposals.map((proposal) => (
+                  <details key={proposal.id}>
+                    <summary>{proposal.title} · consiglio precedente</summary>
+                    <p>{proposal.explanation}</p>
+                  </details>
+                ))}
+              </div>
+            </section>
+          ))}
+          {job && (
+            <section className="ai-chat-turn" aria-live="polite">
+              <p className="ai-message ai-message-user">{saved?.request?.text}</p>
+              <div className="ai-message ai-message-assistant">
+                <p className="small muted">
+                  Consiglio salvato ·{' '}
+                  {new Date(saved?.savedAt ?? Date.now()).toLocaleString('it-IT')}
+                </p>
+                <p role="status">{job.message}</p>
+              </div>
+              {job.proposals.map((proposal) => (
+                <Proposal
+                  key={proposal.id}
+                  proposal={proposal}
+                  available={
+                    online &&
+                    job.status === 'ready' &&
+                    proposal.baseEtag === etag &&
+                    Date.parse(proposal.expiresAt) > Date.now()
+                  }
+                  busy={busy}
+                  onApply={() => void apply(proposal)}
+                />
+              ))}
+              {job.status === 'uncertain' && (
+                <p className="warning-note">
+                  La richiesta non viene ripetuta automaticamente. Serve una verifica della spesa da
+                  parte dell’operatore.
+                </p>
+              )}
+            </section>
+          )}
+          {saved?.request && (!job || pending.has(job.status)) && (
+            <button
+              className="button subtle full"
+              disabled={!online || busy}
+              onClick={() => void generate(true)}
+            >
+              Riprendi la richiesta salvata
+            </button>
+          )}
+          {(busy || (!!job && pending.has(job.status))) && (
+            <button className="button subtle full" disabled={!online} onClick={() => void cancel()}>
+              Annulla richiesta
+            </button>
+          )}
+          {job && !pending.has(job.status) && (
+            <button className="text-link" disabled={busy} onClick={() => void resetConversation()}>
+              Nuova conversazione
+            </button>
+          )}
+          {error && (
+            <p className="error-note" role="alert">
+              {error}
+            </p>
+          )}
+          <p className="small muted">
+            I consigli possono contenere errori. Prenotazioni e orari fissi restano protetti. Le
+            bozze non vengono inviate automaticamente quando torna la connessione.
+          </p>
+        </div>
+        <form
+          className="ai-composer"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void generate();
+          }}
+        >
+          <label>
+            {job ? 'Continua la conversazione' : 'Cosa vuoi cambiare?'}
+            <textarea
+              aria-label="Richiesta di assistenza"
+              rows={2}
+              maxLength={2000}
+              value={text}
+              disabled={busy}
+              placeholder={
+                job ? 'Vorrei dedicare meno tempo al museo…' : 'Siamo in ritardo di 30 minuti…'
+              }
+              onChange={(e) => setText(e.target.value)}
+            />
+          </label>
+          <button
+            className="button full"
+            type="submit"
+            disabled={
+              !loaded || !online || busy || !text.trim() || (!!job && pending.has(job.status))
+            }
+          >
+            <Sparkles size={17} />
+            {busy ? 'Valutazione in corso…' : 'Invia richiesta'}
+          </button>
+        </form>
       </div>
     </Modal>
   );
 }
+
 function Proposal({
   proposal,
   available,
@@ -355,8 +468,12 @@ function Proposal({
         <section className="ai-route" key={i}>
           <h4>
             <Route size={17} />
-            {trip.plan.places.find((p) => p.id === route.fromPlaceId)?.name} →{' '}
-            {trip.plan.places.find((p) => p.id === route.toPlaceId)?.name}
+            {
+              [...trip.plan.places, ...proposal.places].find((p) => p.id === route.fromPlaceId)
+                ?.name
+            }{' '}
+            →{' '}
+            {[...trip.plan.places, ...proposal.places].find((p) => p.id === route.toPlaceId)?.name}
           </h4>
           <p>
             {route.durationMinutes} min a piedi
@@ -372,8 +489,13 @@ function Proposal({
           {route.streets.length > 0 && <p className="small">{route.streets.join(' → ')}</p>}
           {route.pois.map((p) => (
             <p className="small" key={p.placeId}>
-              <strong>{trip.plan.places.find((place) => place.id === p.placeId)?.name}</strong>:{' '}
-              {p.note} {p.visitMinutes > 0 && `· sosta ${p.visitMinutes} min`}
+              <strong>
+                {
+                  [...trip.plan.places, ...proposal.places].find((place) => place.id === p.placeId)
+                    ?.name
+                }
+              </strong>
+              : {p.note} {p.visitMinutes > 0 && `· sosta ${p.visitMinutes} min`}
             </p>
           ))}
         </section>

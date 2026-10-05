@@ -28,8 +28,8 @@ import { exchangeRate } from './rates.js';
 import { TravelCommandSchema } from '../domain/travel.js';
 import { createThrottle, limitBody } from './security.js';
 import { AiService } from './ai.js';
-import { MockAiProviders } from './ai-providers.js';
-import { AiRequestSchema, AiPlanError } from '../domain/ai.js';
+import { aiProviders } from './ai-config.js';
+import { AiRequestSchema, AiProposalSchema, AiPlanError } from '../domain/ai.js';
 import { AiLimitsSchema, AiBudgetError, Microdollars } from '../domain/ai-budget.js';
 
 const prefix = '/api/v1';
@@ -37,14 +37,7 @@ type Env = { Variables: { role: 'agent' | 'browser' | 'ai-admin' } };
 export function createApp(injected?: TripService, injectedAi?: AiService) {
   const app = new Hono<Env>();
   const service = () => injected ?? new TripService(storage());
-  const ai = () =>
-    injectedAi ??
-    new AiService(
-      service(),
-      process.env.AI_MODE === 'mock' && process.env.STORAGE_DRIVER !== 'blob' && !process.env.VERCEL
-        ? new MockAiProviders()
-        : undefined,
-    );
+  const ai = () => injectedAi ?? new AiService(service(), aiProviders());
   const throttle = createThrottle();
   const id = (c: Context, name = 'id') => Id.parse(c.req.param(name));
   const agent = (c: Context<Env>) => {
@@ -77,7 +70,10 @@ export function createApp(injected?: TripService, injectedAi?: AiService) {
       const authorization = c.req.header('Authorization') ?? '';
       if (
         !authorization.startsWith('Bearer ') ||
+        authorization.length < 39 ||
         authorization.length > 263 ||
+        process.env.AI_ADMIN_TOKEN_HASH === process.env.AGENT_API_TOKEN_HASH ||
+        process.env.AI_ADMIN_TOKEN_HASH === process.env.APP_ACCESS_KEY_HASH ||
         !sameHash(authorization.slice(7), process.env.AI_ADMIN_TOKEN_HASH)
       )
         throw new ApiError(401, 'Credenziale operatore AI richiesta.');
@@ -255,19 +251,17 @@ export function createApp(injected?: TripService, injectedAi?: AiService) {
     const { ledger } = await budget.read();
     return c.json({
       ...(await budget.status()),
-      runs: ledger.runs
-        .slice(-20)
-        .map((r) => ({
-          id: r.id,
-          status: r.status,
-          cancelRequested: r.cancelRequested,
-          operations: r.operations.map((o) => ({
-            id: o.id,
-            state: o.state,
-            maxCost: o.maxCost,
-            actualCost: o.actualCost,
-          })),
+      runs: ledger.runs.slice(-20).map((r) => ({
+        id: r.id,
+        status: r.status,
+        cancelRequested: r.cancelRequested,
+        operations: r.operations.map((o) => ({
+          id: o.id,
+          state: o.state,
+          maxCost: o.maxCost,
+          actualCost: o.actualCost,
         })),
+      })),
     });
   });
   app.post(`${prefix}/ai/admin/configure`, async (c) => {
@@ -732,6 +726,34 @@ export function openapi() {
     ['/trips/{id}/travel/apply', ['post'], 'Commit an idempotent travel command; browser or agent'],
     ['/trips/{id}/travel/original', ['get'], 'Read immutable authored plan'],
     ['/trips/{id}/travel/history', ['get'], 'Last 20 travel changes'],
+    ['/trips/{id}/ai/requests', ['post'], 'Create an idempotent AI job; X-Trip-Version required'],
+    [
+      '/trips/{id}/ai/requests/{jobId}',
+      ['get'],
+      'Read progress and proposals; never dispatch providers',
+    ],
+    ['/trips/{id}/ai/requests/{jobId}/advance', ['post'], 'Advance one durably reserved AI stage'],
+    [
+      '/trips/{id}/ai/requests/{jobId}/cancel',
+      ['post'],
+      'Cancel unused work; retain uncertain charges',
+    ],
+    [
+      '/trips/{id}/ai/proposals/{proposalId}/apply',
+      ['post'],
+      'Approve exact preview hash; atomic conditional trip write',
+    ],
+    ['/ai/admin/status', ['get'], 'Independent AI operator only; bounded budget/job status'],
+    [
+      '/ai/admin/configure',
+      ['post'],
+      'Independent AI operator only; enable, disable or set ceilings',
+    ],
+    [
+      '/ai/admin/reconcile',
+      ['post'],
+      'Independent AI operator only; settle verified charge with evidence',
+    ],
     ['/trips/{id}/history', ['get'], 'Agent reads available plan snapshots'],
     [
       '/trips/{id}/rates',
@@ -787,6 +809,32 @@ export function openapi() {
       ]),
     );
   const bodySchemas: Record<string, unknown> = {
+    'post /trips/{id}/ai/requests': { $ref: '#/components/schemas/AiRequest' },
+    'post /trips/{id}/ai/proposals/{proposalId}/apply': z.toJSONSchema(
+      z
+        .object({
+          previewHash: z.string().regex(/^[a-f0-9]{64}$/),
+        })
+        .strict(),
+    ),
+    'post /ai/admin/configure': z.toJSONSchema(
+      z
+        .object({
+          enabled: z.boolean(),
+          limits: AiLimitsSchema.optional(),
+        })
+        .strict(),
+    ),
+    'post /ai/admin/reconcile': z.toJSONSchema(
+      z
+        .object({
+          runId: Id,
+          operationId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,127}$/),
+          actualCost: Microdollars,
+          evidence: z.string().min(12).max(1000),
+        })
+        .strict(),
+    ),
     'post /trips/{id}/travel/preview': { $ref: '#/components/schemas/TravelCommand' },
     'post /trips/{id}/travel/apply': { $ref: '#/components/schemas/TravelCommand' },
     'post /session': z.toJSONSchema(z.object({ key: z.string() })),
@@ -837,7 +885,9 @@ export function openapi() {
         !path.endsWith('/travel/preview') &&
         !path.endsWith('/rates') &&
         !path.endsWith('/finalize') &&
-        !path.endsWith('/file')
+        !path.endsWith('/file') &&
+        !path.endsWith('/advance') &&
+        !path.endsWith('/cancel')
       )
         operation.parameters.push({
           name: 'X-Trip-Version',
@@ -846,6 +896,7 @@ export function openapi() {
           schema: { type: 'string' },
         });
       if (path === '/session' && method === 'post') operation.security = [];
+      if (path.startsWith('/ai/admin/')) operation.security = [{ AiOperator: [] }];
     }
   }
   return {
@@ -856,10 +907,17 @@ export function openapi() {
     components: {
       securitySchemes: {
         AgentToken: { type: 'http', scheme: 'bearer' },
+        AiOperator: {
+          type: 'http',
+          scheme: 'bearer',
+          description: 'Independent AI operator token; not the agent token',
+        },
         BrowserSession: { type: 'apiKey', in: 'cookie', name: 'passo_session' },
       },
       schemas: {
         TravelCommand: z.toJSONSchema(TravelCommandSchema),
+        AiRequest: z.toJSONSchema(AiRequestSchema),
+        AiProposal: z.toJSONSchema(AiProposalSchema),
         Trip: z.toJSONSchema(TripSchema),
         Plan: z.toJSONSchema(PlanSchema),
         Ticket: z.toJSONSchema(TicketSchema),

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Id, SafeUrl, TripSchema, type Trip } from './schema.js';
+import { Id, SafeUrl, PlaceSchema, SourceSchema, TripSchema, type Trip } from './schema.js';
 import {
   TravelCommandSchema,
   applyTravel,
@@ -7,27 +7,46 @@ import {
   preconditions,
   upgradeTrip,
   type TravelAction,
+  type TravelCommand,
 } from './travel.js';
 
 const timestamp = z.iso.datetime({ offset: true });
+export function isAiDraftAllowed(command: TravelCommand, dayId: string) {
+  const action = command.action;
+  return (
+    ['delay', 'timing', 'skip', 'move', 'add'].includes(action.type) &&
+    'dayId' in action &&
+    action.dayId === dayId &&
+    !(action.type === 'move' && action.toDayId !== dayId) &&
+    !(action.type === 'timing' && action.leaveAt) &&
+    !(action.type === 'skip' && action.acknowledgedBooking)
+  );
+}
 export const AiRequestSchema = z
   .object({
     id: Id,
     dayId: Id,
     stepId: Id.optional(),
+    parentJobId: Id.optional(),
     text: z.string().trim().min(1).max(2000),
     preference: z.enum(['fastest', 'scenic']).default('fastest'),
     draft: TravelCommandSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((request) => !request.draft || isAiDraftAllowed(request.draft, request.dayId), {
+    path: ['draft'],
+    message: 'La richiesta AI può includere solo modifiche flessibili nella stessa giornata.',
+  });
 export type AiRequest = z.infer<typeof AiRequestSchema>;
 
 // Required nullable fields deliberately match the strict Responses JSON format.
 // Models express intentions; only the server constructs commands and versions.
 export const AiIntentSchema = z
   .object({
-    type: z.enum(['delay', 'timing', 'skip', 'move']),
-    stepId: Id,
+    type: z.enum(['delay', 'timing', 'skip', 'move', 'add']),
+    stepId: Id.nullable(),
+    placeId: Id.nullable(),
+    title: z.string().min(1).max(150).nullable(),
     minutes: z.number().int().min(1).max(720).nullable(),
     start: timestamp.nullable(),
     durationMinutes: z.number().int().min(1).max(720).nullable(),
@@ -65,6 +84,29 @@ export const AiModelOutputSchema = z
   .strict();
 export type AiModelOutput = z.infer<typeof AiModelOutputSchema>;
 export type AiIntent = z.infer<typeof AiIntentSchema>;
+export const AiDiscoverySchema = z
+  .object({
+    places: z.array(PlaceSchema).max(6),
+    sources: z.array(SourceSchema).max(6),
+    notes: z.array(z.string().max(1000)).max(6),
+  })
+  .strict();
+export type AiDiscovery = z.infer<typeof AiDiscoverySchema>;
+export function withDiscovery(input: Trip, discovery: AiDiscovery): Trip {
+  const trip = structuredClone(input);
+  for (const [items, additions] of [
+    [trip.plan.places, discovery.places],
+    [trip.plan.sources, discovery.sources],
+  ] as const) {
+    for (const addition of additions) {
+      const existing = items.find((item) => item.id === addition.id);
+      if (existing && JSON.stringify(existing) !== JSON.stringify(addition))
+        throw new AiPlanError('conflict', 'Un luogo o una fonte ha un ID già utilizzato.');
+      if (!existing) (items as Array<typeof addition>).push(structuredClone(addition));
+    }
+  }
+  return TripSchema.parse(trip);
+}
 
 export const AiCitationSchema = z
   .object({
@@ -119,6 +161,8 @@ export const AiProposalSchema = z
     explanation: z.string().max(3000),
     warnings: z.array(z.string().max(1000)).max(10),
     commands: z.array(TravelCommandSchema).max(8),
+    places: z.array(PlaceSchema).max(6).default([]),
+    sources: z.array(SourceSchema).max(6).default([]),
     routes: z.array(AiRouteSchema).max(6),
     citations: z.array(AiCitationSchema).max(20),
     previewHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -138,7 +182,7 @@ export class AiPlanError extends Error {
 }
 
 /** Explicit allowlist: never serialize a Trip or operational state to a model. */
-export function aiContext(trip: Trip, request: AiRequest) {
+export function aiContext(trip: Trip, request: AiRequest, candidates: string[] = []) {
   const day = trip.plan.days.find((d) => d.id === request.dayId);
   if (!day) throw new AiPlanError('invalid', 'Scegli una giornata del viaggio.');
   const steps = day.stepIds.map((id) => trip.plan.steps.find((s) => s.id === id)!);
@@ -153,6 +197,7 @@ export function aiContext(trip: Trip, request: AiRequest) {
         : [s.fromPlaceId, s.toPlaceId, ...s.pois.map((p) => p.placeId)],
     ),
   );
+  candidates.forEach((id) => placeIds.add(id));
   const sources = new Set(steps.flatMap((s) => s.sourceIds));
   const places = trip.plan.places.filter((p) => placeIds.has(p.id)).slice(0, 80);
   places.forEach((p) => p.sourceIds.forEach((id) => sources.add(id)));
@@ -161,8 +206,24 @@ export function aiContext(trip: Trip, request: AiRequest) {
       .map((c) => (c.charCodeAt(0) < 32 ? ' ' : c))
       .join('')
       .slice(0, max);
+  const publicUrl = (value?: string) => {
+    if (!value) return null;
+    const url = new URL(value);
+    if (url.username || url.password) return null;
+    // Authentication/signature parameters are unnecessary for public research.
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  };
   return {
     day: { id: day.id, date: day.date, timezone: trip.plan.timezone },
+    researchNotes: [] as string[],
+    conversation: [] as Array<{
+      request: string;
+      response: string;
+      options: string[];
+      previousPlan: boolean;
+    }>,
     request: { text: request.text, preference: request.preference, stepId: request.stepId ?? null },
     steps: steps.map((s) => ({
       id: s.id,
@@ -199,7 +260,7 @@ export function aiContext(trip: Trip, request: AiRequest) {
       sourceIds: p.sourceIds.slice(0, 10),
     })),
     sources: trip.plan.sources
-      .filter((s) => sources.has(s.id))
+      .filter((s) => sources.has(s.id) && s.status !== 'user_provided')
       .slice(0, 30)
       .map((s) => ({
         id: s.id,
@@ -207,14 +268,61 @@ export function aiContext(trip: Trip, request: AiRequest) {
         description: text(s.description),
         status: s.status,
         verifiedOn: s.verifiedOn ?? null,
-        url: s.url ?? null,
+        url: publicUrl(s.url),
       })),
   };
 }
 export type AiContext = ReturnType<typeof aiContext>;
 
-export function intentAction(trip: Trip, dayId: string, intent: AiIntent): TravelAction {
+export function intentAction(
+  trip: Trip,
+  dayId: string,
+  intent: AiIntent,
+  commandId = 'ai-new-stop',
+): TravelAction {
   const day = trip.plan.days.find((d) => d.id === dayId);
+  if (intent.type === 'add') {
+    const place = trip.plan.places.find((p) => p.id === intent.placeId);
+    const after = trip.plan.steps.find((s) => s.id === intent.afterId);
+    if (
+      !day ||
+      !place ||
+      intent.stepId !== null ||
+      intent.minutes !== null ||
+      !intent.durationMinutes ||
+      !intent.title ||
+      (intent.afterId && (!after || !day.stepIds.includes(after.id)))
+    )
+      throw new AiPlanError(
+        'invalid',
+        'La nuova tappa deve usare un luogo verificato e una posizione valida.',
+      );
+    const start =
+      intent.start ?? after?.end ?? trip.plan.steps.find((s) => s.id === day.stepIds[0])?.start;
+    if (!start) throw new AiPlanError('invalid', 'Indica l’orario della nuova tappa.');
+    return {
+      type: 'add',
+      dayId,
+      ...(intent.afterId ? { afterId: intent.afterId } : {}),
+      stop: {
+        id: `stop-${commandId.slice(0, 70)}`,
+        kind: 'stop',
+        placeId: place.id,
+        category: 'free-time',
+        title: intent.title,
+        start,
+        end: new Date(Date.parse(start) + intent.durationMinutes * 60000).toISOString(),
+        summary: 'Sosta suggerita: durata indicativa, costo e disponibilità da verificare.',
+        details: '',
+        sourceIds: place.sourceIds,
+        sourceActivityIds: [],
+        notes: [],
+        optional: true,
+      },
+    };
+  }
+  if (intent.placeId !== null || intent.title !== null)
+    throw new AiPlanError('invalid', 'La modifica contiene campi non previsti.');
   const step = trip.plan.steps.find((s) => s.id === intent.stepId);
   if (!step || !day?.stepIds.includes(step.id))
     throw new AiPlanError('invalid', 'L’assistente ha indicato una tappa non disponibile.');
@@ -286,6 +394,7 @@ export function projectAiProposal(input: Trip, proposal: AiProposalInput): Trip 
   };
   const previousHistory = structuredClone(trip.travel!.history);
   const previousIds = [...trip.travel!.appliedIds];
+  trip = withDiscovery(trip, { places: proposal.places, sources: proposal.sources, notes: [] });
   const keys = new Set<string>();
   for (const command of proposal.commands) {
     // The manual draft is validated by the existing engine. Model commands have
@@ -340,6 +449,16 @@ export function projectAiProposal(input: Trip, proposal: AiProposalInput): Trip 
       updated.estimate = route.estimate;
       updated.streets = route.streets;
       updated.pois = route.pois;
+      updated.routeEvidence = {
+        provider: route.provider,
+        checkedAt: route.checkedAt,
+        walkingMinutes: route.durationMinutes,
+        visitMinutes: dwell,
+        directMinutes: route.directMinutes,
+        extraWalkingMinutes: route.extraWalkingMinutes,
+        geometry: route.geometry,
+        citations: route.citations,
+      };
       updated.summary = `${route.durationMinutes} min a piedi${dwell ? ` + ${dwell} min per le soste` : ''}. ${route.estimate ? 'Tempo stimato.' : 'Percorso calcolato.'}`;
       updated.details = [
         `Percorso ${route.provider === 'openrouteservice' ? 'calcolato da OpenRouteService' : 'basato sull’itinerario esistente'} il ${route.checkedAt.slice(0, 10)}.`,

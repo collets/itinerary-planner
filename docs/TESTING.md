@@ -1,5 +1,18 @@
 # Verification
 
+## AI assistance
+
+The feature branch adds ledger concurrency/rollover/uncertain-charge tests,
+bounded synthetic intent evaluation cases, context privacy, atomic proposals,
+discovered stops, follow-up ownership, protected bookings, independent operator
+auth and provider HTTP contract tests. All providers are mocked; no API keys or
+paid model calls are needed. Browser tests additionally cover the header
+assistant's full-screen chat, approval, follow-up, cached/offline draft,
+logout cleanup and a manual draft plus route/POI proposal. Tests use fictional
+data and an isolated temporary file store. These checks do not evaluate real
+model quality, physical-phone behavior or routing/account configuration; those
+remain explicit live-evaluation gates in [AI-DEVELOPMENT.md](AI-DEVELOPMENT.md).
+
 `pnpm check` runs TypeScript, ESLint, domain/API tests and the production PWA build. `pnpm test:e2e` uses an isolated temporary store and the actual production build.
 
 Every production build also runs `pnpm check:server`: TypeScript compiles the API and domain code with NodeNext resolution, then plain Node imports the emitted JavaScript and checks health and secure login. Server imports use explicit `.js` extensions so Vercel's native ESM loader can resolve them. This check does not use Vite or tsx, which accept extensionless imports that fail in production.

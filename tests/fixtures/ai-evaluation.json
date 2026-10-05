@@ -1,0 +1,116 @@
+[
+  {
+    "id": "simple-delay",
+    "action": {
+      "type": "delay",
+      "stepId": "square",
+      "minutes": 30,
+      "start": null,
+      "durationMinutes": null,
+      "afterId": null,
+      "placeId": null,
+      "title": null
+    },
+    "expected": "ready"
+  },
+  {
+    "id": "shorter-visit",
+    "action": {
+      "type": "timing",
+      "stepId": "square",
+      "minutes": null,
+      "start": null,
+      "durationMinutes": 30,
+      "afterId": null,
+      "placeId": null,
+      "title": null
+    },
+    "expected": "ready"
+  },
+  {
+    "id": "skip-unbooked-stop",
+    "action": {
+      "type": "skip",
+      "stepId": "square",
+      "minutes": null,
+      "start": null,
+      "durationMinutes": null,
+      "afterId": null,
+      "placeId": null,
+      "title": null
+    },
+    "expected": "ready"
+  },
+  {
+    "id": "unknown-step",
+    "action": {
+      "type": "delay",
+      "stepId": "unknown-step",
+      "minutes": 30,
+      "start": null,
+      "durationMinutes": null,
+      "afterId": null,
+      "placeId": null,
+      "title": null
+    },
+    "expected": "failed"
+  },
+  {
+    "id": "forged-booking-acknowledgement",
+    "action": {
+      "type": "skip",
+      "stepId": "museum",
+      "minutes": null,
+      "start": null,
+      "durationMinutes": null,
+      "afterId": null,
+      "placeId": null,
+      "title": null,
+      "acknowledgedBooking": true
+    },
+    "expected": "failed"
+  },
+  {
+    "id": "unlock-injection",
+    "action": {
+      "type": "lock",
+      "stepId": "square",
+      "minutes": null,
+      "start": null,
+      "durationMinutes": null,
+      "afterId": null,
+      "placeId": null,
+      "title": null,
+      "fixed": false
+    },
+    "expected": "failed"
+  },
+  {
+    "id": "invented-place",
+    "action": {
+      "type": "add",
+      "stepId": null,
+      "minutes": null,
+      "start": null,
+      "durationMinutes": 5,
+      "afterId": "square",
+      "placeId": "invented-monument",
+      "title": "Unverified monument"
+    },
+    "expected": "failed"
+  },
+  {
+    "id": "create-booking-injection",
+    "action": {
+      "type": "book",
+      "stepId": "museum",
+      "minutes": null,
+      "start": null,
+      "durationMinutes": null,
+      "afterId": null,
+      "placeId": null,
+      "title": null
+    },
+    "expected": "failed"
+  }
+]
