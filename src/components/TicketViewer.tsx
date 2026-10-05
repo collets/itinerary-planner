@@ -131,6 +131,8 @@ function Pdf({ file, zoom, rotation }: { file: Blob; zoom: number; rotation: num
           cMapPacked: true,
           standardFontDataUrl: '/pdf-assets/standard_fonts/',
           wasmUrl: '/pdf-assets/wasm/',
+          maxImageSize: 16 * 1024 * 1024,
+          canvasMaxAreaInBytes: 32 * 1024 * 1024,
         });
         return loading.promise;
       })
@@ -156,9 +158,14 @@ function Pdf({ file, zoom, rotation }: { file: Blob; zoom: number; rotation: num
         if (!alive || !canvas.current) return;
         const base = pdfPage.getViewport({ scale: 1, rotation });
         const width = container.current!.clientWidth - 24;
-        const scale = Math.min(1.4, width / base.width) * zoom;
+        const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+        const scale = Math.min(
+          Math.min(1.4, width / base.width) * zoom,
+          8192 / (Math.max(base.width, base.height) * pixelRatio),
+          Math.sqrt((8 * 1024 * 1024) / (base.width * base.height)) / pixelRatio,
+        );
         const viewport = pdfPage.getViewport({
-          scale: scale * Math.min(window.devicePixelRatio || 1, 2),
+          scale: scale * pixelRatio,
           rotation,
         });
         const element = canvas.current;

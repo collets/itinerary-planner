@@ -1,5 +1,11 @@
 # API
 
+Security limits: nonempty JSON bodies require `application/json`; login is capped at
+1 KiB, Blob callbacks at 16 KiB, other mutations at 64 KiB, and trip creation/plan
+writes at 512 KiB. Binary ticket uploads remain 10 MiB. Oversize requests return
+413, incorrect content types 415, and throttled requests 429 with `Retry-After`.
+See [Security audit](SECURITY-AUDIT.md) for scope and outstanding edge controls.
+
 Base URL: `/api/v1`. `/health` is public; trip data and API schemas require authentication. Responses use `Cache-Control: private, no-store`. Most trip mutations return `{trip, etag, warnings}`. Read responses also include an `ETag` header; mutations return the new version only in JSON. Validation errors contain `issues` with paths and messages.
 
 ## Authentication

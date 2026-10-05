@@ -2,6 +2,11 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import vercel from './vercel.json';
+
+const securityHeaders = Object.fromEntries(
+  vercel.headers[0].headers.map(({ key, value }) => [key, value]),
+);
 
 export default defineConfig({
   plugins: [
@@ -37,5 +42,6 @@ export default defineConfig({
     host: '0.0.0.0',
     proxy: { '/api': { target: 'http://127.0.0.1:3001', changeOrigin: false } },
   },
+  preview: { headers: securityHeaders },
   build: { target: 'es2022' },
 });

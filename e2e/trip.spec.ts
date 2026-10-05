@@ -53,6 +53,30 @@ const activeSection = async (page: Page, name: string) => {
     navigation.getByRole(name === 'Adesso' ? 'button' : 'link', { name, exact: true }),
   ).toHaveAttribute('aria-current', 'page');
 };
+test('blocks injected scripts and unexpected outbound requests with the deployed CSP', async ({
+  page,
+}) => {
+  const response = await page.goto('/');
+  expect(response?.headers()['content-security-policy']).toContain("script-src 'self'");
+  await page.evaluate(async () => {
+    document.addEventListener('securitypolicyviolation', (event) => {
+      document.documentElement.dataset[
+        event.violatedDirective.startsWith('script') ? 'scriptBlocked' : 'connectionBlocked'
+      ] = 'true';
+    });
+    const script = document.createElement('script');
+    script.textContent = "document.documentElement.dataset.injected = 'yes'";
+    document.body.append(script);
+    await fetch('https://example.com/exfiltration').catch(() => {});
+  });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.dataset.scriptBlocked))
+    .toBe('true');
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.dataset.connectionBlocked))
+    .toBe('true');
+  expect(await page.evaluate(() => document.documentElement.dataset.injected)).toBeUndefined();
+});
 test('full day, route and details remain usable on mobile', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));

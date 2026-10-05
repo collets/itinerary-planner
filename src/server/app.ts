@@ -1,11 +1,17 @@
 import { Hono, type Context } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { secureHeaders } from 'hono/secure-headers';
-import { bodyLimit } from 'hono/body-limit';
 import { z, ZodError } from 'zod';
 import jsonPatch from 'fast-json-patch';
 import type { Operation } from 'fast-json-patch';
-import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
+import {
+  handleUpload,
+  handleUploadPresigned,
+  type HandleUploadBody,
+  type HandleUploadPresignedBody,
+  type HandleUploadOptions,
+} from '@vercel/blob/client';
+import { issueSignedToken } from '@vercel/blob';
 import {
   Id,
   PlanSchema,
@@ -20,12 +26,14 @@ import { TripService } from './service.js';
 import { checkOrigin, login, logout, role } from './auth.js';
 import { exchangeRate } from './rates.js';
 import { TravelCommandSchema } from '../domain/travel.js';
+import { createThrottle, limitBody } from './security.js';
 
 const prefix = '/api/v1';
 type Env = { Variables: { role: 'agent' | 'browser' } };
 export function createApp(injected?: TripService) {
   const app = new Hono<Env>();
   const service = () => injected ?? new TripService(storage());
+  const throttle = createThrottle();
   const id = (c: Context, name = 'id') => Id.parse(c.req.param(name));
   const agent = (c: Context<Env>) => {
     if (c.get('role') !== 'agent')
@@ -36,24 +44,56 @@ export function createApp(injected?: TripService) {
     if (['GET', 'HEAD'].includes(c.req.method)) c.header('ETag', value.etag);
     return c.json({ ...value, warnings: bookingWarnings(value.trip) });
   };
-  app.use('*', secureHeaders());
+  app.use(
+    '*',
+    secureHeaders({
+      xFrameOptions: 'DENY',
+      contentSecurityPolicy: { defaultSrc: ["'none'"], frameAncestors: ["'none'"], sandbox: [] },
+    }),
+  );
   app.use('*', async (c, next) => {
     c.header('Cache-Control', 'private, no-store');
     await next();
   });
-  app.use(
-    '*',
-    bodyLimit({
-      maxSize: 11 * 1024 * 1024,
-      onError: (c) => c.json({ error: 'File too large' }, 413),
-    }),
-  );
+  app.use('*', async (c, next) => {
+    const path = c.req.path;
+    const loginRequest = path === `${prefix}/session` && c.req.method === 'POST';
+    const callback = path === `${prefix}/uploads/blob` && c.req.method === 'POST';
+    const health = path === `${prefix}/health` && ['GET', 'HEAD'].includes(c.req.method);
+    if (!loginRequest && !callback && !health) {
+      const access = await role(c);
+      if (!access) throw new ApiError(401, 'Accedi per continuare');
+      c.set('role', access);
+      if (!['GET', 'HEAD'].includes(c.req.method)) {
+        if (access === 'browser') checkOrigin(c);
+        throttle(c, 'write', 180);
+      }
+    }
+    if (loginRequest) {
+      checkOrigin(c);
+      throttle(c, 'login', 20);
+    }
+    const binary =
+      c.req.method === 'PUT' && /^\/api\/v1\/trips\/[^/]+\/tickets\/[^/]+\/file$/.test(path);
+    const plan = path === `${prefix}/trips` || path.endsWith('/plan');
+    const maximum = loginRequest
+      ? 1024
+      : callback
+        ? 16384
+        : binary
+          ? 10 * 1024 * 1024
+          : plan
+            ? 512 * 1024
+            : 64 * 1024;
+    await limitBody(c, maximum, !binary);
+    await next();
+  });
   app.onError((error, c) => {
     if (error instanceof ZodError)
       return c.json(
         {
           error: 'Validation failed',
-          issues: error.issues.map((i) => ({ path: i.path, message: i.message })),
+          issues: error.issues.slice(0, 25).map((i) => ({ path: i.path, message: i.message })),
         },
         422,
       );
@@ -66,56 +106,97 @@ export function createApp(injected?: TripService) {
   app.get(`${prefix}/health`, (c) => c.json({ ok: true }));
   app.post(`${prefix}/session`, async (c) => {
     checkOrigin(c);
-    const body = z.object({ key: z.string().min(1).max(256) }).parse(await c.req.json());
+    const body = z
+      .object({ key: z.string().min(1).max(256) })
+      .strict()
+      .parse(await c.req.json());
     return c.json(await login(c, body.key));
   });
   // Blob verifies signed completion callbacks. Token generation requires app authentication.
   app.post(`${prefix}/uploads/blob`, async (c) => {
     if (process.env.STORAGE_DRIVER !== 'blob')
       throw new ApiError(400, 'Blob uploads are not enabled');
-    const body = await c.req.json<HandleUploadBody>();
-    const response = await handleUpload({
-      request: c.req.raw,
-      body,
-      onBeforeGenerateToken: async (pathname, clientPayload) => {
-        const access = await role(c);
-        if (!access) throw new ApiError(401, 'Authentication required');
-        if (access === 'browser') checkOrigin(c);
-        const { tripId, ticketId } = z
-          .object({ tripId: Id, ticketId: Id })
-          .parse(JSON.parse(clientPayload ?? '{}'));
-        const { trip } = await service().read(tripId);
-        const ticket = trip.state.tickets.find((t) => t.id === ticketId);
-        if (!ticket || ticket.status !== 'pending' || ticket.pathname !== pathname)
-          throw new ApiError(403, 'Unauthorized upload target');
-        return {
-          allowedContentTypes: [ticket.contentType],
-          maximumSizeInBytes: ticket.size,
-          addRandomSuffix: false,
-          allowOverwrite: false,
-          validUntil: Date.now() + 10 * 60 * 1000,
-          tokenPayload: JSON.stringify({ tripId, ticketId }),
-        };
-      },
-      onUploadCompleted: async ({ tokenPayload, blob }) => {
-        const { tripId, ticketId } = z
-          .object({ tripId: Id, ticketId: Id })
-          .parse(JSON.parse(tokenPayload ?? '{}'));
-        const { trip } = await service().read(tripId);
-        const ticket = trip.state.tickets.find((t) => t.id === ticketId);
-        if (!ticket || ticket.pathname !== blob.pathname)
-          throw new ApiError(403, 'Invalid upload completion');
-        await service().finalize(tripId, ticketId);
-      },
-    });
+    const body = await c.req.json<HandleUploadBody | HandleUploadPresignedBody>();
+    if (
+      !body ||
+      ![
+        'blob.generate-client-token',
+        'blob.generate-presigned-url',
+        'blob.upload-completed',
+      ].includes(body.type)
+    )
+      throw new ApiError(400, 'Invalid upload event');
+    if (body.type !== 'blob.upload-completed') {
+      const access = await role(c);
+      if (!access) throw new ApiError(401, 'Accedi per continuare');
+      if (access === 'browser') checkOrigin(c);
+      throttle(c, 'write', 180);
+    }
+    if (body.type === 'blob.upload-completed' && !c.req.header('x-vercel-signature'))
+      throw new ApiError(403, 'Signed callback required');
+    const authorizeUpload = async (pathname: string, clientPayload: string | null) => {
+      const access = await role(c);
+      if (!access) throw new ApiError(401, 'Authentication required');
+      if (access === 'browser') checkOrigin(c);
+      const { tripId, ticketId } = z
+        .object({ tripId: Id, ticketId: Id })
+        .parse(JSON.parse(clientPayload ?? '{}'));
+      const { trip } = await service().read(tripId);
+      const ticket = trip.state.tickets.find((t) => t.id === ticketId);
+      if (!ticket || ticket.status !== 'pending' || ticket.pathname !== pathname)
+        throw new ApiError(403, 'Unauthorized upload target');
+      return {
+        allowedContentTypes: [ticket.contentType],
+        maximumSizeInBytes: ticket.size,
+        addRandomSuffix: false,
+        allowOverwrite: false,
+        validUntil: Date.now() + 10 * 60 * 1000,
+        tokenPayload: JSON.stringify({ tripId, ticketId }),
+      };
+    };
+    const onUploadCompleted: HandleUploadOptions['onUploadCompleted'] = async ({
+      tokenPayload,
+      blob,
+    }) => {
+      const { tripId, ticketId } = z
+        .object({ tripId: Id, ticketId: Id })
+        .parse(JSON.parse(tokenPayload ?? '{}'));
+      const { trip } = await service().read(tripId);
+      const ticket = trip.state.tickets.find((t) => t.id === ticketId);
+      if (!ticket || ticket.pathname !== blob.pathname)
+        throw new ApiError(403, 'Invalid upload completion');
+      await service().finalize(tripId, ticketId);
+    };
+    const presigned = !!process.env.BLOB_STORE_ID && !process.env.BLOB_READ_WRITE_TOKEN;
+    if (
+      (presigned && body.type === 'blob.generate-client-token') ||
+      (!presigned && body.type === 'blob.generate-presigned-url')
+    )
+      throw new ApiError(400, 'Refresh the app before uploading');
+    const response = presigned
+      ? await handleUploadPresigned({
+          request: c.req.raw,
+          body: body as HandleUploadPresignedBody,
+          onUploadCompleted,
+          getSignedToken: async (pathname, clientPayload) => {
+            const options = await authorizeUpload(pathname, clientPayload);
+            const token = await issueSignedToken({
+              pathname,
+              operations: ['put'],
+              allowedContentTypes: options.allowedContentTypes,
+              maximumSizeInBytes: options.maximumSizeInBytes,
+              validUntil: options.validUntil,
+            });
+            return { token, urlOptions: options };
+          },
+        })
+      : await handleUpload({
+          request: c.req.raw,
+          body: body as HandleUploadBody,
+          onBeforeGenerateToken: authorizeUpload,
+          onUploadCompleted,
+        });
     return c.json(response);
-  });
-  app.use(`${prefix}/*`, async (c, next) => {
-    const access = await role(c);
-    if (!access) throw new ApiError(401, 'Accedi per continuare');
-    c.set('role', access);
-    if (access === 'browser' && !['GET', 'HEAD'].includes(c.req.method)) checkOrigin(c);
-    await next();
   });
   app.get(`${prefix}/session`, async (c) => {
     if (c.get('role') === 'agent') return c.json({ role: 'agent' });
@@ -129,6 +210,7 @@ export function createApp(injected?: TripService) {
   app.get(`${prefix}/config`, (c) =>
     c.json({
       storage: process.env.STORAGE_DRIVER === 'blob' ? 'blob' : 'file',
+      presignedUploads: !!process.env.BLOB_STORE_ID && !process.env.BLOB_READ_WRITE_TOKEN,
       editing: process.env.TRAVEL_EDITING_ENABLED !== 'false',
       staging: process.env.APP_ENVIRONMENT === 'staging',
     }),
@@ -200,6 +282,7 @@ export function createApp(injected?: TripService) {
     return c.json({ plan: value.trip.plan, etag: value.etag });
   });
   app.post(`${prefix}/trips/:id/rates`, async (c) => {
+    throttle(c, 'rates', 30);
     const value = await service().read(id(c));
     const currencies = [
       ...new Set([
@@ -207,9 +290,13 @@ export function createApp(injected?: TripService) {
         ...value.trip.state.reservations.flatMap((r) => (r.currency ? [r.currency] : [])),
       ]),
     ].filter((currency) => currency !== 'EUR');
+    if (currencies.length > 8)
+      throw new ApiError(422, 'Aggiorna al massimo otto valute per viaggio.');
     const rates = await Promise.all(
       currencies.map((currency) => exchangeRate(currency, service().store)),
     );
+    if (JSON.stringify(value.trip.state.exchangeRates) === JSON.stringify(rates))
+      return result(c, value);
     return result(
       c,
       await service().mutate(id(c), value.etag, (draft) => {

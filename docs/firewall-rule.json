@@ -1,0 +1,25 @@
+{
+  "name": "Limit Passo API requests",
+  "active": true,
+  "description": "Preview API abuse protection. Extend to production after validating normal sync traffic.",
+  "conditionGroup": [
+    {
+      "conditions": [
+        { "type": "path", "op": "pre", "value": "/api" },
+        { "type": "environment", "op": "eq", "value": "preview" }
+      ]
+    }
+  ],
+  "action": {
+    "mitigate": {
+      "action": "rate_limit",
+      "rateLimit": {
+        "limit": 300,
+        "action": "rate_limit",
+        "window": 60,
+        "algo": "fixed_window",
+        "keys": ["ip"]
+      }
+    }
+  }
+}

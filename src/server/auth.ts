@@ -8,9 +8,7 @@ export const hashKey = (key: string) => createHash('sha256').update(key).digest(
 const sameHash = (key: string, hash: string | undefined) => {
   const actual = hashKey(key);
   return (
-    !!hash &&
-    hash.length === actual.length &&
-    timingSafeEqual(Buffer.from(actual), Buffer.from(hash))
+    !!hash && /^[a-f0-9]{64}$/.test(hash) && timingSafeEqual(Buffer.from(actual), Buffer.from(hash))
   );
 };
 function secret() {
@@ -23,18 +21,20 @@ export async function role(c: Context): Promise<'agent' | 'browser' | null> {
   const authorization = c.req.header('Authorization');
   if (authorization)
     return authorization.startsWith('Bearer ') &&
+      authorization.length <= 263 &&
       sameHash(authorization.slice(7), process.env.AGENT_API_TOKEN_HASH)
       ? 'agent'
       : null;
   const cookie = getCookie(c, 'passo_session');
-  if (!cookie) return null;
+  if (!cookie || cookie.length > 2048) return null;
   try {
     const { payload } = await jwtVerify(cookie, secret(), {
       issuer: 'passo',
       audience: 'passo-browser',
       algorithms: ['HS256'],
     });
-    return payload.sub === process.env.APP_ACCESS_KEY_HASH ? 'browser' : null;
+    const accessHash = process.env.APP_ACCESS_KEY_HASH;
+    return /^[a-f0-9]{64}$/.test(accessHash ?? '') && payload.sub === accessHash ? 'browser' : null;
   } catch {
     return null;
   }

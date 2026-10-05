@@ -1,20 +1,27 @@
 import { z } from 'zod';
 
-export const Id = z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/);
+export const Id = z
+  .string()
+  .max(80)
+  .regex(/^[a-z0-9][a-z0-9-]{0,79}$/);
 export const SafeUrl = z
   .string()
+  .max(2048)
   .url()
   .refine((v) => /^https?:\/\//i.test(v), 'Only HTTP(S) links are allowed');
 const DateOnly = z.iso.date();
 const Timestamp = z.iso.datetime({ offset: true });
-const Timezone = z.string().refine((v) => {
-  try {
-    new Intl.DateTimeFormat('en', { timeZone: v });
-    return true;
-  } catch {
-    return false;
-  }
-}, 'Invalid IANA timezone');
+const Timezone = z
+  .string()
+  .max(100)
+  .refine((v) => {
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: v });
+      return true;
+    } catch {
+      return false;
+    }
+  }, 'Invalid IANA timezone');
 const Evidence = z.enum([
   'verified_official',
   'verified_secondary',
@@ -25,9 +32,9 @@ const Evidence = z.enum([
 export const SourceSchema = z
   .object({
     id: Id,
-    title: z.string(),
+    title: z.string().max(20000),
     url: SafeUrl.optional(),
-    description: z.string(),
+    description: z.string().max(20000),
     verifiedOn: DateOnly.optional(),
     status: Evidence,
   })
@@ -35,18 +42,18 @@ export const SourceSchema = z
 export const PlaceSchema = z
   .object({
     id: Id,
-    name: z.string().min(1),
-    localName: z.string().optional(),
-    address: z.string(),
-    description: z.string(),
-    details: z.string().default(''),
-    trivia: z.string().default(''),
-    entrance: z.string().default(''),
-    openingHours: z.string().default(''),
+    name: z.string().max(20000).min(1),
+    localName: z.string().max(20000).optional(),
+    address: z.string().max(20000),
+    description: z.string().max(20000),
+    details: z.string().max(20000).default(''),
+    trivia: z.string().max(20000).default(''),
+    entrance: z.string().max(20000).default(''),
+    openingHours: z.string().max(20000).default(''),
     website: SafeUrl.optional(),
     bookingUrl: SafeUrl.optional(),
-    phone: z.string().optional(),
-    sourceIds: z.array(Id).default([]),
+    phone: z.string().max(20000).optional(),
+    sourceIds: z.array(Id).max(2000).default([]),
     coordinates: z
       .object({
         lat: z.number().min(-90).max(90),
@@ -58,16 +65,16 @@ export const PlaceSchema = z
   .strict();
 const StepBase = {
   id: Id,
-  sourceActivityIds: z.array(z.string()).default([]),
-  title: z.string().min(1),
+  sourceActivityIds: z.array(z.string().max(20000)).max(2000).default([]),
+  title: z.string().max(20000).min(1),
   start: Timestamp,
   end: Timestamp,
   timezone: Timezone.optional(),
-  summary: z.string(),
-  details: z.string().default(''),
+  summary: z.string().max(20000),
+  details: z.string().max(20000).default(''),
   optional: z.boolean().default(false),
-  sourceIds: z.array(Id).default([]),
-  notes: z.array(z.string()).default([]),
+  sourceIds: z.array(Id).max(2000).default([]),
+  notes: z.array(z.string().max(20000)).max(2000).default([]),
 };
 export const StopSchema = z
   .object({
@@ -87,13 +94,18 @@ export const LegSchema = z
     durationMinutes: z.number().int().min(0),
     distanceKm: z.number().min(0).optional(),
     estimate: z.boolean().default(true),
-    streets: z.array(z.string()).default([]),
+    streets: z.array(z.string().max(20000)).max(2000).default([]),
     pois: z
       .array(
         z
-          .object({ placeId: Id, note: z.string(), detourMinutes: z.number().min(0).default(0) })
+          .object({
+            placeId: Id,
+            note: z.string().max(20000),
+            detourMinutes: z.number().min(0).default(0),
+          })
           .strict(),
       )
+      .max(100)
       .default([]),
   })
   .strict();
@@ -101,16 +113,19 @@ export const StepSchema = z.discriminatedUnion('kind', [StopSchema, LegSchema]);
 export const CostSchema = z
   .object({
     id: Id,
-    title: z.string(),
+    title: z.string().max(20000),
     category: z.enum(['admission', 'transport', 'meal', 'extras', 'other']),
     min: z.number().min(0).nullable(),
     max: z.number().min(0).nullable(),
-    currency: z.string().regex(/^[A-Z]{3}$/),
+    currency: z
+      .string()
+      .max(20000)
+      .regex(/^[A-Z]{3}$/),
     basis: z.enum(['person', 'group']),
     inclusion: z.enum(['base', 'optional', 'excluded']),
     status: Evidence,
-    stepIds: z.array(Id).default([]),
-    sourceIds: z.array(Id).default([]),
+    stepIds: z.array(Id).max(2000).default([]),
+    sourceIds: z.array(Id).max(2000).default([]),
   })
   .strict()
   .refine(
@@ -121,11 +136,11 @@ export const CostSchema = z
 const AlternativeSchema = z
   .object({
     id: Id,
-    title: z.string(),
-    description: z.string(),
-    costDifference: z.string(),
-    affectedStepIds: z.array(Id),
-    replacementSteps: z.array(StepSchema).default([]),
+    title: z.string().max(20000),
+    description: z.string().max(20000),
+    costDifference: z.string().max(20000),
+    affectedStepIds: z.array(Id).max(2000),
+    replacementSteps: z.array(StepSchema).max(2000).default([]),
     costChanges: z
       .array(z.object({ id: Id, inclusion: z.enum(['base', 'optional', 'excluded']) }).strict())
       .default([]),
@@ -133,47 +148,52 @@ const AlternativeSchema = z
   .strict();
 export const PlanSchema = z
   .object({
-    title: z.string().min(1),
-    subtitle: z.string().default(''),
-    destinations: z.array(z.string()).min(1),
+    title: z.string().max(20000).min(1),
+    subtitle: z.string().max(20000).default(''),
+    destinations: z.array(z.string().max(20000)).max(2000).min(1),
     startDate: DateOnly,
     endDate: DateOnly,
     timezone: Timezone,
     language: z.literal('it-IT').default('it-IT'),
     dateStatus: z.enum(['confirmed', 'provisional']),
-    assumptions: z.array(z.string()).default([]),
-    travellers: z.array(z.object({ id: Id, name: z.string().min(1) }).strict()).min(1),
+    assumptions: z.array(z.string().max(20000)).max(2000).default([]),
+    travellers: z
+      .array(z.object({ id: Id, name: z.string().max(20000).min(1) }).strict())
+      .min(1)
+      .max(50),
     days: z
       .array(
         z
           .object({
             id: Id,
             date: DateOnly,
-            title: z.string(),
-            summary: z.string(),
-            stepIds: z.array(Id),
+            title: z.string().max(20000),
+            summary: z.string().max(20000),
+            stepIds: z.array(Id).max(2000),
           })
           .strict(),
       )
-      .min(1),
-    steps: z.array(StepSchema).min(1),
-    places: z.array(PlaceSchema),
-    sources: z.array(SourceSchema),
-    costs: z.array(CostSchema).default([]),
-    alternatives: z.array(AlternativeSchema).default([]),
+      .min(1)
+      .max(366),
+    steps: z.array(StepSchema).max(2000).min(1),
+    places: z.array(PlaceSchema).max(2000),
+    sources: z.array(SourceSchema).max(1000),
+    costs: z.array(CostSchema).max(2000).default([]),
+    alternatives: z.array(AlternativeSchema).max(100).default([]),
     tasks: z
       .array(
         z
           .object({
             id: Id,
-            title: z.string(),
-            description: z.string(),
+            title: z.string().max(20000),
+            description: z.string().max(20000),
             priority: z.enum(['high', 'medium', 'low']),
             stepId: Id.optional(),
             url: SafeUrl.optional(),
           })
           .strict(),
       )
+      .max(500)
       .default([]),
   })
   .strict();
@@ -181,10 +201,10 @@ export const ReservationSchema = z
   .object({
     id: Id,
     stepId: Id,
-    title: z.string(),
-    travellerIds: z.array(Id).min(1),
+    title: z.string().max(20000),
+    travellerIds: z.array(Id).max(2000).min(1),
     status: z.enum(['not-booked', 'booked', 'cancelled']),
-    reference: z.string().default(''),
+    reference: z.string().max(20000).default(''),
     slot: Timestamp.optional(),
     paidAmount: z.number().min(0).optional(),
     currency: z
@@ -192,17 +212,17 @@ export const ReservationSchema = z
       .regex(/^[A-Z]{3}$/)
       .optional(),
     costId: Id.optional(),
-    notes: z.string().default(''),
+    notes: z.string().max(20000).default(''),
   })
   .strict();
 export const TicketSchema = z
   .object({
     id: Id,
     stepId: Id,
-    travellerIds: z.array(Id).min(1),
+    travellerIds: z.array(Id).max(2000).min(1),
     reservationId: Id.optional(),
-    title: z.string().min(1),
-    filename: z.string(),
+    title: z.string().max(20000).min(1),
+    filename: z.string().max(20000),
     contentType: z.enum(['application/pdf', 'image/jpeg', 'image/png']),
     size: z
       .number()
@@ -210,7 +230,7 @@ export const TicketSchema = z
       .min(1)
       .max(10 * 1024 * 1024),
     status: z.enum(['pending', 'ready']),
-    pathname: z.string(),
+    pathname: z.string().max(20000),
     uploadedAt: Timestamp,
   })
   .strict();
@@ -219,13 +239,16 @@ export const StateSchema = z
   .object({
     progress: z.record(Id, ProgressStatus).default({}),
     taskCompletion: z.record(Id, z.boolean()).default({}),
-    reservations: z.array(ReservationSchema).default([]),
-    tickets: z.array(TicketSchema).default([]),
+    reservations: z.array(ReservationSchema).max(500).default([]),
+    tickets: z.array(TicketSchema).max(200).default([]),
     exchangeRates: z
       .array(
         z
           .object({
-            currency: z.string().regex(/^[A-Z]{3}$/),
+            currency: z
+              .string()
+              .max(20000)
+              .regex(/^[A-Z]{3}$/),
             euroPerUnit: z.number().positive().finite(),
             asOf: DateOnly,
             fetchedAt: Timestamp,
@@ -239,7 +262,7 @@ export const StateSchema = z
 const TravelSnapshotSchema = z
   .object({
     plan: PlanSchema,
-    notes: z.record(Id, z.string()),
+    notes: z.record(Id, z.string().max(20000)),
     locks: z.record(Id, Timestamp),
     completedAt: z.record(Id, Timestamp),
     progress: z.record(Id, ProgressStatus),
@@ -248,19 +271,19 @@ const TravelSnapshotSchema = z
 export const TravelSchema = z
   .object({
     originalPlan: PlanSchema,
-    notes: z.record(Id, z.string()).default({}),
+    notes: z.record(Id, z.string().max(20000)).default({}),
     locks: z.record(Id, Timestamp).default({}),
     completedAt: z.record(Id, Timestamp).default({}),
-    appliedIds: z.array(Id).default([]),
+    appliedIds: z.array(Id).max(2000).default([]),
     history: z
       .array(
         z
           .object({
             id: Id,
-            title: z.string(),
+            title: z.string().max(20000),
             at: Timestamp,
             before: TravelSnapshotSchema,
-            after: z.record(z.string(), z.string()),
+            after: z.record(z.string().max(20000), z.string().max(20000)),
           })
           .strict(),
       )

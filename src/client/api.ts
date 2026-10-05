@@ -1,5 +1,5 @@
 import { applyTravel, preconditions, type TravelCommand } from '../domain/travel';
-import { upload } from '@vercel/blob/client';
+import { upload, uploadPresigned } from '@vercel/blob/client';
 import { TripSchema, type Trip, type Ticket } from '../domain/schema';
 import { db, clearPrivateData, overlay, journal, type Pending } from './db';
 
@@ -49,6 +49,7 @@ export async function request<T>(
       422: 'Controlla i dati inseriti e i collegamenti alla tappa.',
       426: 'Aggiorna l’app per usare il programma adattato.',
       428: 'Aggiorna il viaggio prima di salvare.',
+      429: 'Troppe richieste. Attendi un minuto e riprova.',
     };
     throw new RequestError(
       response.status,
@@ -361,10 +362,10 @@ export async function uploadTicket(
     etag,
   );
   const ticket = created.trip.state.tickets.at(-1)!;
-  const config = await request<{ storage: string }>('/config');
+  const config = await request<{ storage: string; presignedUploads?: boolean }>('/config');
   progress(10);
   if (config.storage === 'blob') {
-    await upload(ticket.pathname, file, {
+    await (config.presignedUploads ? uploadPresigned : upload)(ticket.pathname, file, {
       access: 'private',
       contentType: file.type,
       handleUploadUrl: '/api/v1/uploads/blob',

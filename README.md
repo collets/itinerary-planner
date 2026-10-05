@@ -2,6 +2,9 @@
 
 A mobile-first, Italian itinerary app. Code and documentation are in English. Trips are location-independent, validated JSON documents served through a private API.
 
+See the [security audit and hardening report](docs/SECURITY-AUDIT.md) for verified
+protections, remaining dashboard tasks and mandatory safeguards before paid AI.
+
 ## Included
 
 - Continuous overview of the entire trip with day navigation, visible hours, stop cards and route connectors.

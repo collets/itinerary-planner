@@ -8,6 +8,18 @@ import { FileStorage } from '../src/server/storage';
 import { hashKey } from '../src/server/auth';
 import { exampleTrip } from '../src/domain/fixture';
 import { exchangeRate } from '../src/server/rates';
+import { SignJWT } from 'jose';
+import { PlanSchema } from '../src/domain/schema';
+import * as blob from '@vercel/blob';
+import * as blobClient from '@vercel/blob/client';
+vi.mock('@vercel/blob', async (original) => {
+  const actual = await original<typeof import('@vercel/blob')>();
+  return { ...actual, issueSignedToken: vi.fn(actual.issueSignedToken) };
+});
+vi.mock('@vercel/blob/client', async (original) => {
+  const actual = await original<typeof import('@vercel/blob/client')>();
+  return { ...actual, handleUploadPresigned: vi.fn(actual.handleUploadPresigned) };
+});
 let directory: string, service: TripService, app: ReturnType<typeof createApp>;
 const token = 'test-agent-token',
   key = 'test-browser-key';
@@ -39,11 +51,245 @@ beforeEach(async () => {
   await service.create('example-trip', exampleTrip().plan);
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   await rm(directory, { recursive: true, force: true });
 });
 describe('private API and edits', () => {
+  it('keeps private routes protected in both API versions and rejects forged credentials', async () => {
+    const routes = [
+      '/trips',
+      '/config',
+      '/openapi.json',
+      '/trips/example-trip',
+      '/trips/example-trip/plan',
+      '/trips/example-trip/history',
+      '/trips/example-trip/travel/history',
+      '/trips/example-trip/tickets/missing/file',
+    ];
+    for (const version of ['v1', 'v2'])
+      for (const path of routes)
+        expect((await app.request(`http://localhost/api/${version}${path}`)).status).toBe(401);
+    const forgedHeaders: Record<string, string>[] = [
+      { Cookie: 'passo_session=forged' },
+      { Authorization: 'Bearer wrong' },
+      { Authorization: 'Bearer test-browser-key' },
+    ];
+    for (const headers of forgedHeaders)
+      expect((await app.request('http://localhost/api/v2/trips', { headers })).status).toBe(401);
+    const expired = await new SignJWT({})
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject(hashKey(key))
+      .setIssuer('passo')
+      .setAudience('passo-browser')
+      .setExpirationTime(1)
+      .sign(new TextEncoder().encode(process.env.SESSION_SECRET));
+    expect(
+      (
+        await app.request('http://localhost/api/v2/trips', {
+          headers: { Cookie: `passo_session=${expired}` },
+        })
+      ).status,
+    ).toBe(401);
+    const loggedIn = await call('/api/v2/session', 'POST', { key }, undefined, {
+      Origin: 'http://localhost',
+    });
+    const cookie = loggedIn.headers.get('set-cookie')!.split(';')[0];
+    for (const origin of [undefined, 'https://evil.example', 'null']) {
+      const response = await app.request(
+        'http://localhost/api/v2/trips/example-trip/tasks/book-museum',
+        {
+          method: 'PATCH',
+          headers: {
+            Cookie: cookie,
+            'Content-Type': 'application/json',
+            ...(origin ? { Origin: origin } : {}),
+          },
+          body: '{"done":true}',
+        },
+      );
+      expect(response.status).toBe(403);
+    }
+    vi.stubEnv('APP_ACCESS_KEY_HASH', hashKey('rotated-key'));
+    expect(
+      (await app.request('http://localhost/api/v2/trips', { headers: { Cookie: cookie } })).status,
+    ).toBe(401);
+  });
+  it('authenticates before parsing private bodies and bounds actual bytes despite dishonest lengths', async () => {
+    const read = vi.spyOn(service, 'read');
+    expect(
+      (
+        await app.request('http://localhost/api/v2/trips/example-trip/tickets/missing/file', {
+          method: 'PUT',
+          body: new Uint8Array(100000),
+        })
+      ).status,
+    ).toBe(401);
+    expect(read).not.toHaveBeenCalled();
+    const oversized = JSON.stringify({ key: 'x'.repeat(2048) });
+    expect(
+      (
+        await app.request('http://localhost/api/v2/session', {
+          method: 'POST',
+          headers: {
+            Origin: 'http://localhost',
+            'Content-Type': 'application/json',
+            'Content-Length': '1',
+          },
+          body: oversized,
+        })
+      ).status,
+    ).toBe(413);
+    expect(
+      (
+        await call('/api/v2/trips/example-trip/tasks/book-museum', 'PATCH', {
+          done: true,
+          padding: 'x'.repeat(65536),
+        })
+      ).status,
+    ).toBe(413);
+    expect(
+      (
+        await app.request('http://localhost/api/v2/trips', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
+          body: '{}',
+        })
+      ).status,
+    ).toBe(415);
+    expect(
+      (
+        await app.request('http://localhost/api/v2/trips', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: '{',
+        })
+      ).status,
+    ).toBe(400);
+  });
+  it('throttles repeated login attempts without accessing storage', async () => {
+    const read = vi.spyOn(service, 'read');
+    for (let i = 0; i < 20; i++)
+      expect(
+        (
+          await call('/api/v2/session', 'POST', { key: 'wrong' }, undefined, {
+            Origin: 'http://localhost',
+          })
+        ).status,
+      ).toBe(401);
+    const blocked = await call('/api/v1/session', 'POST', { key }, undefined, {
+      Origin: 'http://localhost',
+    });
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(read).not.toHaveBeenCalled();
+  });
+  it('rejects unauthenticated upload tokens and unsigned completion callbacks', async () => {
+    vi.stubEnv('STORAGE_DRIVER', 'blob');
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'vercel_blob_rw_test_test');
+    const finalize = vi.spyOn(service, 'finalize');
+    const read = vi.spyOn(service, 'read');
+    const request = (body: unknown, headers = {}) =>
+      app.request('http://localhost/api/v2/uploads/blob', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+      });
+    expect(
+      (
+        await request({
+          type: 'blob.generate-client-token',
+          payload: { pathname: 'tickets/example-trip/unknown/original.pdf' },
+        })
+      ).status,
+    ).toBe(401);
+    expect((await request({ type: 'unexpected' })).status).toBe(400);
+    expect(
+      (await request({ type: 'blob.upload-completed', payload: {} })).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(
+      (
+        await request(
+          { type: 'blob.upload-completed', payload: {} },
+          { 'x-vercel-signature': '00'.repeat(32) },
+        )
+      ).status,
+    ).toBeGreaterThanOrEqual(400);
+    expect(finalize).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+  });
+  it('rejects filesystem escape paths and excessive catalog sizes', async () => {
+    const store = new FileStorage(directory);
+    for (const path of ['/tmp/outside', '../outside', 'trips/../../outside'])
+      await expect(store.read(path)).rejects.toMatchObject({ status: 400 });
+    const plan = exampleTrip().plan;
+    plan.steps = Array.from({ length: 2001 }, () => plan.steps[0]);
+    expect(PlanSchema.safeParse(plan).success).toBe(false);
+  });
+  it('scopes OIDC upload delegation to one pending ticket and rejects alternate paths', async () => {
+    vi.stubEnv('STORAGE_DRIVER', 'blob');
+    vi.stubEnv('BLOB_STORE_ID', 'store_test');
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', '');
+    const value = await service.read('example-trip');
+    const made = await call(
+      '/api/v2/trips/example-trip/tickets',
+      'POST',
+      {
+        title: 'Test',
+        filename: 'test.pdf',
+        stepId: 'museum',
+        travellerIds: ['traveller-one'],
+        contentType: 'application/pdf',
+        size: 128,
+      },
+      value.etag,
+    );
+    const ticket = (await made.json()).trip.state.tickets[0];
+    const issue = vi.mocked(blob.issueSignedToken).mockResolvedValue({
+      delegationToken: 'test',
+      clientSigningToken: 'test',
+      validUntil: Date.now() + 600000,
+    });
+    vi.mocked(blobClient.handleUploadPresigned).mockImplementation(async (options) => {
+      if (options.body.type !== 'blob.generate-presigned-url') throw new Error('Unexpected event');
+      await options.getSignedToken(
+        options.body.payload.pathname,
+        options.body.payload.clientPayload,
+        false,
+      );
+      return { type: 'blob.upload-completed', response: 'ok' };
+    });
+    const event = (pathname: string) => ({
+      type: 'blob.generate-presigned-url',
+      payload: {
+        pathname,
+        clientPayload: JSON.stringify({ tripId: 'example-trip', ticketId: ticket.id }),
+        multipart: false,
+      },
+    });
+    expect(
+      (
+        await call(
+          '/api/v2/uploads/blob',
+          'POST',
+          event('tickets/example-trip/another/original.pdf'),
+        )
+      ).status,
+    ).toBe(403);
+    expect(issue).not.toHaveBeenCalled();
+    expect((await call('/api/v2/uploads/blob', 'POST', event(ticket.pathname))).status).toBe(200);
+    expect(issue).toHaveBeenCalledWith({
+      pathname: ticket.pathname,
+      operations: ['put'],
+      allowedContentTypes: ['application/pdf'],
+      maximumSizeInBytes: 128,
+      validUntil: expect.any(Number),
+    });
+    expect(issue.mock.calls[0][0].validUntil! - Date.now()).toBeLessThanOrEqual(600000);
+    expect((await call('/api/v2/config')).status).toBe(200);
+    expect((await (await call('/api/v2/config')).json()).presignedUploads).toBe(true);
+  });
   it('blocks unauthenticated reads and cross-origin login, issues HttpOnly sessions', async () => {
     expect((await app.request('http://localhost/api/v1/trips')).status).toBe(401);
     expect(

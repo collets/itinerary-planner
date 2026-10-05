@@ -2,15 +2,14 @@ import { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
 import { Duplex } from 'node:stream';
 import { expect, it, vi } from 'vitest';
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-import api from '../api/index';
+import api, { type ApiRequest } from '../api/index';
 import { hashKey } from '../src/server/auth';
 it('preserves HTTPS origin and secure cookies after a native Vercel rewrite', async () => {
   vi.stubEnv('VERCEL', '1');
   vi.stubEnv('APP_ACCESS_KEY_HASH', hashKey('adapter-test-key'));
   vi.stubEnv('SESSION_SECRET', 'adapter-test-session-secret-at-least-thirty-two');
   try {
-    const req = new IncomingMessage(new Socket()) as VercelRequest & { rawBody: Buffer };
+    const req = new IncomingMessage(new Socket()) as ApiRequest & { rawBody: Buffer };
     req.method = 'POST';
     req.url = '/api?route=v1/session';
     req.query = { route: 'v1/session' };
@@ -29,7 +28,7 @@ it('preserves HTTPS origin and secure cookies after a native Vercel rewrite', as
     ];
     req.rawBody = Buffer.from(JSON.stringify({ key: 'adapter-test-key' }));
     const output: Buffer[] = [];
-    const res = new ServerResponse(req) as unknown as VercelResponse;
+    const res = new ServerResponse(req);
     res.assignSocket(
       new Duplex({
         read() {},

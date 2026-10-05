@@ -1,5 +1,9 @@
 # AI itinerary assistance: feasibility and costs
 
+The [security audit](SECURITY-AUDIT.md) adds mandatory launch requirements for
+durable spending reservations, provider limits and abuse testing. Complete those
+before connecting a paid provider.
+
 Research date: 2026-10-05. Status: proposal for review; no AI integration has been implemented or paid API requests made.
 
 ## Recommendation

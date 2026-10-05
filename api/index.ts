@@ -1,8 +1,9 @@
 import { handle } from '@hono/node-server/vercel';
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createApp } from '../src/server/app.js';
 const handler = handle(createApp());
-export default async function api(req: VercelRequest, res: VercelResponse) {
+export type ApiRequest = IncomingMessage & { query: Record<string, string | string[] | undefined> };
+export default async function api(req: ApiRequest, res: ServerResponse) {
   const route = req.query.route;
   if (typeof route === 'string') {
     const url = new URL(req.url ?? '/', 'https://localhost');

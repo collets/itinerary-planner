@@ -1,5 +1,9 @@
 # Managing itinerary data
 
+Catalogs and text fields have resource limits in `src/domain/schema.ts`, and plan
+requests have a 512 KiB body limit. See [Security audit](SECURITY-AUDIT.md) for the
+specific limits. Split unusually large imports into smaller trips.
+
 ## Agent workflow
 
 1. Read this document and `src/domain/schema.ts`; obtain the authenticated `/api/v1/openapi.json` or `pnpm trip schema local-data/schema.json`.

@@ -28,7 +28,7 @@ const digest = (bytes: Uint8Array) => '"' + createHash('sha256').update(bytes).d
 export class FileStorage implements Storage {
   constructor(private root: string) {}
   private path(path: string) {
-    if (path.includes('..') || !/^[a-z0-9/._-]+$/.test(path))
+    if (path.startsWith('/') || path.includes('..') || !/^[a-z0-9/._-]+$/.test(path))
       throw new ApiError(400, 'Invalid storage path');
     return resolve(this.root, path);
   }
@@ -180,12 +180,14 @@ export class BlobStorage implements Storage {
   async stream(path: string) {
     try {
       return (
-        await get(path, {
-          access: 'private',
-          useCache: false,
-          headers: { 'Accept-Encoding': 'identity' },
-        })
-      )?.stream ?? null;
+        (
+          await get(path, {
+            access: 'private',
+            useCache: false,
+            headers: { 'Accept-Encoding': 'identity' },
+          })
+        )?.stream ?? null
+      );
     } catch (e) {
       if (e instanceof BlobNotFoundError) return null;
       throw e;
