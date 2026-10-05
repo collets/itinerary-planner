@@ -2545,3 +2545,77 @@ legend {
     padding: 12px;
   }
 }
+
+/* Assistance shares the existing full-screen mobile dialog and page scroll lock. */
+.ai-assistant {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.ai-assistant label {
+  display: grid;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.ai-assistant textarea,
+.ai-assistant select {
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: white;
+  color: inherit;
+}
+.ai-assistant p {
+  overflow-wrap: anywhere;
+}
+.ai-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.ai-intro svg {
+  flex: none;
+  margin-top: 4px;
+}
+.ai-intro p {
+  margin: 0;
+}
+.ai-advice,
+.ai-proposal {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.ai-proposal {
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  padding: 16px;
+  background: white;
+}
+.ai-proposal h3,
+.ai-proposal p {
+  margin: 0;
+}
+.ai-route {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+.ai-route h4 {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  margin: 0;
+}
+.ai-assistant .button {
+  min-height: 44px;
+  white-space: normal;
+}
+.day-edit-row {
+  flex-wrap: wrap;
+  gap: 8px;
+}

@@ -102,6 +102,7 @@ export const LegSchema = z
             placeId: Id,
             note: z.string().max(20000),
             detourMinutes: z.number().min(0).default(0),
+            visitMinutes: z.number().int().min(0).max(120).optional(),
           })
           .strict(),
       )

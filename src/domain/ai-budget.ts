@@ -15,7 +15,7 @@ export const DEFAULT_AI_LIMITS: AiLimits = {
   monthly: 10_000_000,
   daily: 1_000_000,
   request: 250_000,
-  operations: 3,
+  operations: 12,
 };
 const identifier = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,127}$/);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -175,6 +175,14 @@ export function startRun(
   }
   if (budgetUsage(ledger, now).active)
     throw new AiBudgetError('busy', 'È già in corso una richiesta AI.');
+  if (
+    ledger.runs.filter((r) => r.createdAt.slice(0, 10) === new Date(now).toISOString().slice(0, 10))
+      .length >= 60
+  )
+    throw new AiBudgetError(
+      'limit',
+      'Limite giornaliero di richieste AI raggiunto. Riprova domani.',
+    );
   if (ledger.runs.length >= 1000)
     throw new AiBudgetError('limit', 'Registro AI completo. Serve una verifica amministrativa.');
   const run: AiRun = {

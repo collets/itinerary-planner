@@ -53,7 +53,9 @@ export async function request<T>(
     };
     throw new RequestError(
       response.status,
-      (path.includes('/travel/') ? data.error : localized[response.status]) ??
+      (path.includes('/travel/') || path.includes('/ai/')
+        ? data.error
+        : localized[response.status]) ??
         data.error ??
         'Impossibile completare la richiesta',
     );

@@ -11,7 +11,7 @@ ETags and conditional writes. It starts disabled and persists limits, run IDs,
 dispatch ownership, reservations, verified charges and explicit reconciliation.
 Amounts use integer microdollars (one dollar = 1,000,000 microdollars).
 
-The default ceilings are $10/month, $1/day, $0.25/run and three paid operations per
+The default ceilings are $10/month, $1/day, $0.25/run and twelve paid operations per
 run. There is one active run across all trips and service instances. Limits are
 operator-owned; a family login cannot change them. A reservation is an upper
 bound, not the expected cost. Unknown prices, unavailable storage, malformed

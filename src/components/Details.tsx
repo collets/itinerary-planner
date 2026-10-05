@@ -424,6 +424,7 @@ function LegDetails({ step }: { step: Extract<Step, { kind: 'leg' }> }) {
                       {poi.detourMinutes
                         ? `Deviazione · +${poi.detourMinutes} min`
                         : 'Sul percorso'}
+                      {!!poi.visitMinutes && ` · sosta ${poi.visitMinutes} min`}
                     </span>
                     <h3>{place.name}</h3>
                     <p>{poi.note}</p>

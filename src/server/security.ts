@@ -5,7 +5,7 @@ import { ApiError } from './storage.js';
 // these counters must never be used as a financial spending limit.
 export function createThrottle(now: () => number = Date.now) {
   const windows = new Map<string, { start: number; count: number }>();
-  return (c: Context, bucket: 'login' | 'write' | 'rates', maximum: number) => {
+  return (c: Context, bucket: 'login' | 'write' | 'rates' | 'ai' | 'ai-admin', maximum: number) => {
     const time = now();
     let window = windows.get(bucket);
     if (!window || time - window.start >= 60000) {

@@ -52,14 +52,23 @@ db.version(2).stores({
   meta: '&id',
 });
 export async function forgetTrip(id: string) {
-  await db.transaction('rw', db.trips, db.files, db.pending, db.travelCommands, async () => {
-    const pending =
-      (await db.pending.where('tripId').equals(id).count()) +
-      (await db.travelCommands.where('tripId').equals(id).count());
-    if (pending) await db.trips.update(id, { downloaded: false, ticketIds: [] });
-    else await db.trips.delete(id);
-    await db.files.where('tripId').equals(id).delete();
-  });
+  await db.transaction(
+    'rw',
+    db.trips,
+    db.files,
+    db.pending,
+    db.travelCommands,
+    db.meta,
+    async () => {
+      const pending =
+        (await db.pending.where('tripId').equals(id).count()) +
+        (await db.travelCommands.where('tripId').equals(id).count());
+      if (pending) await db.trips.update(id, { downloaded: false, ticketIds: [] });
+      else await db.trips.delete(id);
+      await db.files.where('tripId').equals(id).delete();
+      await db.meta.where('id').startsWith(`ai:${id}:`).delete();
+    },
+  );
 }
 export async function clearPrivateData() {
   await db.transaction(

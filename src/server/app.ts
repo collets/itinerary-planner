@@ -23,16 +23,28 @@ import {
 import { bookingWarnings } from '../domain/trip.js';
 import { ApiError, storage } from './storage.js';
 import { TripService } from './service.js';
-import { checkOrigin, login, logout, role } from './auth.js';
+import { checkOrigin, login, logout, role, sameHash } from './auth.js';
 import { exchangeRate } from './rates.js';
 import { TravelCommandSchema } from '../domain/travel.js';
 import { createThrottle, limitBody } from './security.js';
+import { AiService } from './ai.js';
+import { MockAiProviders } from './ai-providers.js';
+import { AiRequestSchema, AiPlanError } from '../domain/ai.js';
+import { AiLimitsSchema, AiBudgetError, Microdollars } from '../domain/ai-budget.js';
 
 const prefix = '/api/v1';
-type Env = { Variables: { role: 'agent' | 'browser' } };
-export function createApp(injected?: TripService) {
+type Env = { Variables: { role: 'agent' | 'browser' | 'ai-admin' } };
+export function createApp(injected?: TripService, injectedAi?: AiService) {
   const app = new Hono<Env>();
   const service = () => injected ?? new TripService(storage());
+  const ai = () =>
+    injectedAi ??
+    new AiService(
+      service(),
+      process.env.AI_MODE === 'mock' && process.env.STORAGE_DRIVER !== 'blob' && !process.env.VERCEL
+        ? new MockAiProviders()
+        : undefined,
+    );
   const throttle = createThrottle();
   const id = (c: Context, name = 'id') => Id.parse(c.req.param(name));
   const agent = (c: Context<Env>) => {
@@ -60,7 +72,18 @@ export function createApp(injected?: TripService) {
     const loginRequest = path === `${prefix}/session` && c.req.method === 'POST';
     const callback = path === `${prefix}/uploads/blob` && c.req.method === 'POST';
     const health = path === `${prefix}/health` && ['GET', 'HEAD'].includes(c.req.method);
-    if (!loginRequest && !callback && !health) {
+    const admin = path.startsWith(`${prefix}/ai/admin/`);
+    if (admin) {
+      const authorization = c.req.header('Authorization') ?? '';
+      if (
+        !authorization.startsWith('Bearer ') ||
+        authorization.length > 263 ||
+        !sameHash(authorization.slice(7), process.env.AI_ADMIN_TOKEN_HASH)
+      )
+        throw new ApiError(401, 'Credenziale operatore AI richiesta.');
+      c.set('role', 'ai-admin');
+      throttle(c, 'ai-admin', 30);
+    } else if (!loginRequest && !callback && !health) {
       const access = await role(c);
       if (!access) throw new ApiError(401, 'Accedi per continuare');
       c.set('role', access);
@@ -99,6 +122,17 @@ export function createApp(injected?: TripService) {
       );
     if (error instanceof ApiError)
       return c.json({ error: error.message }, error.status as ContentfulStatusCode);
+    if (error instanceof AiBudgetError)
+      return c.json(
+        { error: error.message, code: error.code },
+        error.code === 'disabled'
+          ? 503
+          : error.code === 'limit' || error.code === 'busy'
+            ? 429
+            : 409,
+      );
+    if (error instanceof AiPlanError)
+      return c.json({ error: error.message }, error.code === 'conflict' ? 409 : 422);
     if (error instanceof SyntaxError) return c.json({ error: 'Invalid JSON' }, 400);
     console.error('API failure', { name: error.name });
     return c.json({ error: 'Servizio momentaneamente non disponibile' }, 503);
@@ -207,14 +241,60 @@ export function createApp(injected?: TripService) {
     return c.json({ ok: true });
   });
   app.get(`${prefix}/openapi.json`, (c) => c.json(openapi()));
-  app.get(`${prefix}/config`, (c) =>
+  app.get(`${prefix}/config`, async (c) =>
     c.json({
       storage: process.env.STORAGE_DRIVER === 'blob' ? 'blob' : 'file',
       presignedUploads: !!process.env.BLOB_STORE_ID && !process.env.BLOB_READ_WRITE_TOKEN,
       editing: process.env.TRAVEL_EDITING_ENABLED !== 'false',
       staging: process.env.APP_ENVIRONMENT === 'staging',
+      ai: await ai().availability(),
     }),
   );
+  app.get(`${prefix}/ai/admin/status`, async (c) => {
+    const budget = ai().budget;
+    const { ledger } = await budget.read();
+    return c.json({
+      ...(await budget.status()),
+      runs: ledger.runs
+        .slice(-20)
+        .map((r) => ({
+          id: r.id,
+          status: r.status,
+          cancelRequested: r.cancelRequested,
+          operations: r.operations.map((o) => ({
+            id: o.id,
+            state: o.state,
+            maxCost: o.maxCost,
+            actualCost: o.actualCost,
+          })),
+        })),
+    });
+  });
+  app.post(`${prefix}/ai/admin/configure`, async (c) => {
+    const body = z
+      .object({ enabled: z.boolean(), limits: AiLimitsSchema.optional() })
+      .strict()
+      .parse(await c.req.json());
+    if (body.enabled && (await ai().availability()).mode === 'off')
+      throw new ApiError(
+        503,
+        'Configura i fornitori e i controlli di spesa prima di abilitare l’AI.',
+      );
+    return c.json(await ai().budget.configure(body.enabled, body.limits));
+  });
+  app.post(`${prefix}/ai/admin/reconcile`, async (c) => {
+    const body = z
+      .object({
+        runId: Id,
+        operationId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,127}$/),
+        actualCost: Microdollars,
+        evidence: z.string().min(12).max(1000),
+      })
+      .strict()
+      .parse(await c.req.json());
+    await ai().budget.reconcile(body.runId, body.operationId, body.actualCost, body.evidence);
+    return c.json({ ok: true });
+  });
   app.use(`${prefix}/trips/:id/*`, async (c, next) => {
     const isV2 = c.req.header('x-passo-api-version') === '2';
     if (!isV2 && !c.req.path.endsWith('/file')) {
@@ -237,6 +317,48 @@ export function createApp(injected?: TripService) {
   app.get(`${prefix}/trips/:id/travel/original`, async (c) => {
     const { trip } = await service().read(id(c));
     return c.json({ plan: trip.travel?.originalPlan ?? trip.plan });
+  });
+  app.use(`${prefix}/trips/:id/ai/*`, async (c, next) => {
+    if (c.req.header('x-passo-api-version') !== '2') throw new ApiError(404, 'Use API v2');
+    if (!['GET', 'HEAD'].includes(c.req.method)) {
+      if (process.env.TRAVEL_EDITING_ENABLED === 'false')
+        throw new ApiError(403, 'Le modifiche al programma sono momentaneamente disattivate.');
+      throttle(c, 'ai', 30);
+    }
+    await next();
+  });
+  app.post(`${prefix}/trips/:id/ai/requests`, async (c) =>
+    c.json(
+      await ai().create(
+        id(c),
+        AiRequestSchema.parse(await c.req.json()),
+        c.req.header('X-Trip-Version'),
+      ),
+    ),
+  );
+  app.get(`${prefix}/trips/:id/ai/requests/:jobId`, async (c) =>
+    c.json(await ai().get(id(c), id(c, 'jobId'))),
+  );
+  app.post(`${prefix}/trips/:id/ai/requests/:jobId/advance`, async (c) =>
+    c.json(await ai().advance(id(c), id(c, 'jobId'))),
+  );
+  app.post(`${prefix}/trips/:id/ai/requests/:jobId/cancel`, async (c) =>
+    c.json(await ai().cancel(id(c), id(c, 'jobId'))),
+  );
+  app.post(`${prefix}/trips/:id/ai/proposals/:proposalId/apply`, async (c) => {
+    const body = z
+      .object({ previewHash: z.string().regex(/^[a-f0-9]{64}$/) })
+      .strict()
+      .parse(await c.req.json());
+    return result(
+      c,
+      await ai().apply(
+        id(c),
+        id(c, 'proposalId'),
+        body.previewHash,
+        c.req.header('X-Trip-Version'),
+      ),
+    );
   });
   app.get(`${prefix}/trips/:id/travel/history`, async (c) => {
     const { trip } = await service().read(id(c));

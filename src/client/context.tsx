@@ -21,10 +21,14 @@ import { loadTrip, queueChange, syncPending, request, type TripResult } from './
 import type { Progress, Trip } from '../domain/schema';
 import { currentStep } from '../domain/trip';
 import { OfflineDialog } from '../components/OfflineDialog';
+import { AiAssistant, type AiTarget } from '../components/AiAssistant';
 
 type TripContextValue = TripResult & {
   editing: boolean;
   edit: (target: EditTarget) => void;
+  aiAvailable: boolean;
+  aiMode: 'off' | 'mock' | 'live';
+  askAi: (target: AiTarget) => void;
   saveTravel: (command: TravelCommand, base: Trip, revise: boolean) => Promise<void>;
   refresh: () => Promise<void>;
   changeProgress: (id: string, status: Progress) => Promise<void>;
@@ -89,7 +93,12 @@ export function TripShell() {
     retry: false,
   });
   const [editor, setEditor] = useState<EditTarget | null>(null),
-    [config, setConfig] = useState({ editing: true, staging: false });
+    [assistant, setAssistant] = useState<AiTarget | null>(null),
+    [config, setConfig] = useState<{
+      editing: boolean;
+      staging: boolean;
+      ai?: { enabled: boolean; mode: 'off' | 'mock' | 'live' };
+    }>({ editing: true, staging: false });
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -239,6 +248,12 @@ export function TripShell() {
     refresh,
     editing: config.editing,
     edit: setEditor,
+    aiAvailable: config.editing && !!config.ai?.enabled,
+    aiMode: config.ai?.mode ?? 'off',
+    askAi: (target) => {
+      setEditor(null);
+      setAssistant(target);
+    },
     saveTravel: async (command, base, revise) => {
       if (!config.editing) throw new Error('Le modifiche sono disattivate.');
       if (revise) {
@@ -344,6 +359,7 @@ export function TripShell() {
         </div>
       )}
       {editor && <TravelEditor target={editor} onClose={() => setEditor(null)} />}
+      {assistant && <AiAssistant target={assistant} onClose={() => setAssistant(null)} />}
       {showOffline && <OfflineDialog onClose={() => setShowOffline(false)} />}
     </TripContext.Provider>
   );

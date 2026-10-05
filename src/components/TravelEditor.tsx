@@ -69,7 +69,7 @@ export function SchedulePreview({ before, after }: { before: Trip; after: Trip }
   );
 }
 export function TravelEditor({ target, onClose }: { target: EditTarget; onClose: () => void }) {
-  const { trip: live, saveTravel, notify } = useTrip(),
+  const { trip: live, saveTravel, notify, aiAvailable, askAi } = useTrip(),
     trip = target.shared ?? live;
   const initial = target.command?.action,
     step = trip.plan.steps.find((s) => s.id === target.stepId),
@@ -708,6 +708,22 @@ export function TravelEditor({ target, onClose }: { target: EditTarget; onClose:
         {preview && (
           <>
             <SchedulePreview before={trip} after={preview.trip} />
+            {aiAvailable &&
+              !target.command &&
+              !['undo', 'restore', 'lock', 'note'].includes(preview.command.action.type) && (
+                <button
+                  className="button subtle full"
+                  onClick={() =>
+                    askAi({
+                      dayId: day.id,
+                      ...(step ? { stepId: step.id } : {}),
+                      draft: preview.command,
+                    })
+                  }
+                >
+                  Suggerisci percorso e luoghi
+                </button>
+              )}
             {preview.command.action.type === 'note' && (
               <p className="travel-note">
                 {preview.command.action.text || 'La nota verrà rimossa.'}

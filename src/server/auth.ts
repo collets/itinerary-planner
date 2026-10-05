@@ -5,7 +5,7 @@ import type { Context } from 'hono';
 import { ApiError } from './storage.js';
 
 export const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');
-const sameHash = (key: string, hash: string | undefined) => {
+export const sameHash = (key: string, hash: string | undefined) => {
   const actual = hashKey(key);
   return (
     !!hash && /^[a-f0-9]{64}$/.test(hash) && timingSafeEqual(Buffer.from(actual), Buffer.from(hash))

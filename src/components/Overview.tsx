@@ -38,7 +38,7 @@ export function ViewSwitch({ stepId, active }: { stepId?: string; active: 'overv
   );
 }
 export function Overview() {
-  const { trip, edit, editing } = useTrip();
+  const { trip, edit, editing, aiAvailable, askAi } = useTrip();
   const navigate = useNavigate();
   const sections = useRef<Record<string, HTMLElement | null>>({});
   const [activeDay, setActiveDay] = useState(trip.plan.days[0].id);
@@ -175,6 +175,14 @@ export function Overview() {
               >
                 Adatta la giornata
               </button>
+              {aiAvailable && (
+                <button
+                  className="button subtle adapt-button"
+                  onClick={() => askAi({ dayId: day.id })}
+                >
+                  Chiedi aiuto
+                </button>
+              )}
             </div>
           )}
           {trip.travel?.notes[day.id] && <p className="travel-note">{trip.travel.notes[day.id]}</p>}
