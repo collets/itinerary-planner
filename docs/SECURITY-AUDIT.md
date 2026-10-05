@@ -133,6 +133,16 @@ and JavaScript `eval` remain disallowed. WebAssembly is allowed for local PDF
 decoders. External Markdown images are blocked by the image policy. The Vercel
 preview toolbar may be blocked too; it is not required by the product.
 
+Staging browser diagnostics on October 5 identified a CSP regression: the
+installed Blob SDK sends both legacy and presigned uploads to
+`https://vercel.com/api/blob/`, not only the storage hostnames. The policy now
+allows that specific path without permitting other Vercel API destinations.
+Browser regression tests exercise the actual SDK with a synthetic provider
+exchange and authenticated local persistence. A three-minute upload deadline
+aborts stalled transfers and releases the form even during SDK retry backoff.
+Pending records remain available for explicit verification or deletion; a timeout
+alone does not prove whether the provider stored the file.
+
 IndexedDB holds downloaded trips, ticket bytes and pending edits. It is not
 separately encrypted. An unlocked device, browser extension or same-origin XSS
 could access it. Offline availability means immediate remote erasure/revocation
@@ -172,6 +182,25 @@ Vercel documents one rate-limit rule and one million allowed requests included
 for Hobby; counters are regional and rotating IPs can evade an IP limit.
 [Vercel WAF limits](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting),
 [Vercel rule template](https://github.com/vercel/firewall-templates/blob/main/api-rate-limit/rule.json).
+
+The owner reported completing the dashboard checks and testing a rule without
+an environment condition on October 5. That condition is optional: omitting it
+allows the rule to cover both preview and production. Conditions in the same
+group are combined with AND. The connector's active configuration read still
+returned not found, so publication cannot be independently confirmed here.
+
+Blob's optional custom firewall is separate from the application's API firewall.
+Enabling it connects the store to the team-wide `vercel-blob-default-project`;
+other stores that enable protection share its rules. Private stores already
+require authentication, and Vercel provides baseline platform DDoS protection.
+Do not use Challenge rules for SDK requests: server-side SDK calls cannot solve
+the browser challenge. A rule targeting application `/api` paths is not a
+substitute for rules scoped to Blob requests.
+[Vercel Blob security](https://vercel.com/docs/vercel-blob/security).
+
+Production still uses the supported legacy read/write token. Keep it until a
+separate OIDC migration is deployed and production uploads, reads and deletes
+are verified. The staging fix does not revoke or change production credentials.
 
 Remaining account-level checks require the owner's normal dashboard access:
 GitHub/Vercel MFA and recovery, repository collaborator scope, deployment/secret
@@ -270,16 +299,18 @@ budget. Routing-account setup can also wait until the mocked flow is ready.
 - `pnpm check`: TypeScript, ESLint, 36 unit/API tests, production build and native
   Node/Vercel adapter gate.
 - Full `pnpm audit --json`: zero known vulnerabilities after dependency changes.
-- Chromium Pixel 7 and WebKit iPhone 13: 14 production-build browser tests,
+- Chromium Pixel 7 and WebKit iPhone 13: 18 production-build browser tests,
   covering CSP enforcement, normal navigation, dialogs, original PNG/PDF tickets,
-  offline PDF assets, offline adjustments and concurrent-device conflicts.
+  offline PDF assets, offline adjustments and concurrent-device conflicts,
+  presigned SDK uploads under CSP and stalled-upload timeouts.
 - Provider-scope regression test: OIDC upload issuance cannot target a different
   ticket path; allowed operation, MIME type, size and expiry are bounded.
 - Anonymous production headers/access checks and targeted Git-history secret scan
   described above; no attempt to break preview SSO protection.
 
-The OIDC issuance test uses provider mocks and the browser suite uses FileStorage.
-It does not replace a real private-Blob upload check in staging. Edge firewall and
+The OIDC issuance test uses provider mocks. The browser suite uses FileStorage,
+including synthetic Blob exchanges through the installed browser SDK. This
+does not replace a real private-Blob upload check in staging. Edge firewall and
 future AI budget controls remain explicit launch gates, not completed protections.
 
 ## References

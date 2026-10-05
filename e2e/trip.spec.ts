@@ -63,11 +63,17 @@ test('blocks injected scripts and unexpected outbound requests with the deployed
       document.documentElement.dataset[
         event.violatedDirective.startsWith('script') ? 'scriptBlocked' : 'connectionBlocked'
       ] = 'true';
+      if (event.violatedDirective === 'connect-src')
+        document.documentElement.dataset.blockedConnections = String(
+          Number(document.documentElement.dataset.blockedConnections ?? 0) + 1,
+        );
     });
     const script = document.createElement('script');
     script.textContent = "document.documentElement.dataset.injected = 'yes'";
     document.body.append(script);
     await fetch('https://example.com/exfiltration').catch(() => {});
+    await fetch('https://vercel.com/api/unrelated').catch(() => {});
+    await fetch('https://vercel.com/api/blob-other/').catch(() => {});
   });
   await expect
     .poll(() => page.evaluate(() => document.documentElement.dataset.scriptBlocked))
@@ -75,7 +81,120 @@ test('blocks injected scripts and unexpected outbound requests with the deployed
   await expect
     .poll(() => page.evaluate(() => document.documentElement.dataset.connectionBlocked))
     .toBe('true');
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.dataset.blockedConnections))
+    .toBe('3');
   expect(await page.evaluate(() => document.documentElement.dataset.injected)).toBeUndefined();
+});
+// Exercise the installed browser SDK, not a substitute upload implementation.
+// Only the provider exchange is intercepted; ticket creation, bytes and
+// finalization use the authenticated local API. No private data leaves the test.
+async function presignedProvider(page: Page) {
+  await page.route('**/api/v2/config', async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      json: { ...(await response.json()), storage: 'blob', presignedUploads: true },
+    });
+  });
+  await page.route('**/api/v1/uploads/blob', async (route) => {
+    const body = route.request().postDataJSON();
+    expect(body.type).toBe('blob.generate-presigned-url');
+    const { pathname, clientPayload } = body.payload;
+    const { tripId, ticketId } = JSON.parse(clientPayload);
+    expect(pathname).toBe(`tickets/${tripId}/${ticketId}/original.pdf`);
+    await route.fulfill({
+      json: {
+        type: body.type,
+        presignedUrlPayload: {
+          delegationToken:
+            Buffer.from(JSON.stringify({ storeId: 'store_e2e', pathname })).toString('base64url') +
+            '.test-signature',
+          signature: 'test-signature',
+          params: { 'vercel-blob-allowed-content-types': 'application/pdf' },
+        },
+      },
+    });
+  });
+}
+
+test('uploads a PDF through the presigned Blob SDK endpoint under the deployed CSP', async ({
+  page,
+}) => {
+  await presignedProvider(page);
+  let transfers = 0;
+  const bytes = pdfDocument();
+  await page.route('https://vercel.com/api/blob/**', async (route) => {
+    const url = new URL(route.request().url());
+    const pathname = url.searchParams.get('pathname')!;
+    expect(route.request().method()).toBe('PUT');
+    expect(route.request().headers()['authorization']).toBeUndefined();
+    expect(url.searchParams.get('vercel-blob-signature')).toBe('test-signature');
+    // Playwright does not expose File/stream upload bytes in intercepted
+    // requests. Persist the selected fixture as the synthetic provider would.
+    expect(route.request().headers()['x-content-length']).toBe(String(bytes.length));
+    const [, tripId, ticketId] = pathname.split('/');
+    const stored = await page.request.put(`/api/v1/trips/${tripId}/tickets/${ticketId}/file`, {
+      headers: { 'Content-Type': 'application/pdf', Origin: 'http://localhost:5173' },
+      data: bytes,
+    });
+    await expect(stored).toBeOK();
+    transfers++;
+    await route.fulfill({
+      json: {
+        pathname,
+        url: `https://e2e.private.blob.vercel-storage.com/${pathname}`,
+        downloadUrl: `https://e2e.private.blob.vercel-storage.com/${pathname}?download=1`,
+        contentType: 'application/pdf',
+        contentDisposition: 'attachment',
+        etag: 'test-etag',
+      },
+    });
+  });
+  await login(page);
+  await page.getByRole('link', { name: 'Biglietti', exact: true }).click();
+  await page.getByRole('button', { name: 'Aggiungi biglietto' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Titolo', { exact: true }).fill('PDF via Blob');
+  await dialog.locator('input[type=file]').setInputFiles({
+    name: 'test.pdf',
+    mimeType: 'application/pdf',
+    buffer: bytes,
+  });
+  await dialog.getByRole('button', { name: 'Salva', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  expect(transfers).toBe(1);
+  await expect(page.getByText('Upload incompleto · Verifica')).not.toBeVisible();
+  await page.getByRole('link', { name: /Apri biglietto/ }).click();
+  await expect(page.locator('.pdf-container canvas')).toBeVisible();
+});
+
+test('a stalled Blob upload times out and releases the ticket form', async ({ page }) => {
+  await presignedProvider(page);
+  let attempts = 0;
+  await page.route('https://vercel.com/api/blob/**', async (route) => {
+    attempts++;
+    await route.abort('failed');
+  });
+  await login(page);
+  await page.getByRole('link', { name: 'Biglietti', exact: true }).click();
+  await page.getByRole('button', { name: 'Aggiungi biglietto' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Titolo', { exact: true }).fill('Upload da riprovare');
+  await dialog.locator('input[type=file]').setInputFiles({
+    name: 'test.pdf',
+    mimeType: 'application/pdf',
+    buffer: pdfDocument(),
+  });
+  await page.clock.install();
+  await dialog.getByRole('button', { name: 'Salva', exact: true }).click();
+  await expect.poll(() => attempts).toBeGreaterThan(0);
+  await expect(dialog.getByRole('button', { name: 'Salvataggio…' })).toBeDisabled();
+  await page.clock.fastForward(180001);
+  await expect(dialog.getByText(/Caricamento interrotto dopo 3 minuti/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Salva', exact: true })).toBeEnabled();
+  await dialog.getByRole('button', { name: 'Chiudi', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
 });
 test('full day, route and details remain usable on mobile', async ({ page }) => {
   const errors: string[] = [];

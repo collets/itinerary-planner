@@ -342,6 +342,30 @@ export async function saveOffline(
   await db.trips.update(id, { downloaded: true, savedAt: Date.now(), ticketIds });
   progress(++done, ticketIds.length + 1);
 }
+async function withUploadDeadline(transfer: (signal: AbortSignal) => Promise<void>) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // The SDK retries network errors with backoff, including CSP failures. Bound
+    // the UI wait as well as aborting the transfer, even during a retry delay.
+    await Promise.race([
+      transfer(controller.signal),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              'Caricamento interrotto dopo 3 minuti. Controlla la connessione e riprova. Se il file risulta incompleto, usa Verifica prima di caricarlo di nuovo.',
+            ),
+          );
+          controller.abort();
+        }, 180000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function uploadTicket(
   trip: Trip,
   etag: string,
@@ -364,26 +388,33 @@ export async function uploadTicket(
   const ticket = created.trip.state.tickets.at(-1)!;
   const config = await request<{ storage: string; presignedUploads?: boolean }>('/config');
   progress(10);
-  if (config.storage === 'blob') {
-    await (config.presignedUploads ? uploadPresigned : upload)(ticket.pathname, file, {
-      access: 'private',
-      contentType: file.type,
-      handleUploadUrl: '/api/v1/uploads/blob',
-      clientPayload: JSON.stringify({ tripId: trip.id, ticketId: ticket.id }),
-      onUploadProgress: (e) => progress(e.percentage),
-    });
-    await request(`/trips/${trip.id}/tickets/${ticket.id}/finalize`, 'POST', {});
-  } else {
-    const response = await fetch(`/api/v1/trips/${trip.id}/tickets/${ticket.id}/file`, {
-      method: 'PUT',
-      headers: { 'Content-Type': file.type },
-      body: file,
-    });
-    if (!response.ok) {
-      const body = await response.json();
-      throw new Error(body.error ?? 'Upload non riuscito');
+  await withUploadDeadline(async (signal) => {
+    if (config.storage === 'blob') {
+      await (config.presignedUploads ? uploadPresigned : upload)(ticket.pathname, file, {
+        access: 'private',
+        contentType: file.type,
+        handleUploadUrl: '/api/v1/uploads/blob',
+        clientPayload: JSON.stringify({ tripId: trip.id, ticketId: ticket.id }),
+        abortSignal: signal,
+        onUploadProgress: (e) => {
+          if (!signal.aborted) progress(e.percentage);
+        },
+      });
+    } else {
+      const response = await fetch(`/api/v1/trips/${trip.id}/tickets/${ticket.id}/file`, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type },
+        body: file,
+        signal,
+      });
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.error ?? 'Upload non riuscito');
+      }
     }
-  }
+  });
+  if (config.storage === 'blob')
+    await request(`/trips/${trip.id}/tickets/${ticket.id}/finalize`, 'POST', {});
   progress(100);
   return fetchTrip(trip.id);
 }
