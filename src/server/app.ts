@@ -19,6 +19,7 @@ import { ApiError, storage } from './storage.js';
 import { TripService } from './service.js';
 import { checkOrigin, login, logout, role } from './auth.js';
 import { exchangeRate } from './rates.js';
+import { TravelCommandSchema } from '../domain/travel.js';
 
 const prefix = '/api/v1';
 type Env = { Variables: { role: 'agent' | 'browser' } };
@@ -126,8 +127,54 @@ export function createApp(injected?: TripService) {
   });
   app.get(`${prefix}/openapi.json`, (c) => c.json(openapi()));
   app.get(`${prefix}/config`, (c) =>
-    c.json({ storage: process.env.STORAGE_DRIVER === 'blob' ? 'blob' : 'file' }),
+    c.json({
+      storage: process.env.STORAGE_DRIVER === 'blob' ? 'blob' : 'file',
+      editing: process.env.TRAVEL_EDITING_ENABLED !== 'false',
+      staging: process.env.APP_ENVIRONMENT === 'staging',
+    }),
   );
+  app.use(`${prefix}/trips/:id/*`, async (c, next) => {
+    const isV2 = c.req.header('x-passo-api-version') === '2';
+    if (!isV2 && !c.req.path.endsWith('/file')) {
+      const value = await service().read(id(c));
+      if (value.trip.schemaVersion === '2')
+        throw new ApiError(426, 'Aggiorna l’app per usare il programma adattato.');
+      if (c.req.path.includes('/travel')) throw new ApiError(404, 'Use API v2');
+    }
+    await next();
+  });
+  // The exact trip route is not covered by /:id/*.
+  app.use(`${prefix}/trips/:id`, async (c, next) => {
+    if (
+      c.req.header('x-passo-api-version') !== '2' &&
+      (await service().read(id(c))).trip.schemaVersion === '2'
+    )
+      throw new ApiError(426, 'Aggiorna l’app per usare il programma adattato.');
+    await next();
+  });
+  app.get(`${prefix}/trips/:id/travel/original`, async (c) => {
+    const { trip } = await service().read(id(c));
+    return c.json({ plan: trip.travel?.originalPlan ?? trip.plan });
+  });
+  app.get(`${prefix}/trips/:id/travel/history`, async (c) => {
+    const { trip } = await service().read(id(c));
+    return c.json(trip.travel?.history.map(({ id, title, at }) => ({ id, title, at })) ?? []);
+  });
+  app.post(`${prefix}/trips/:id/travel/:operation`, async (c) => {
+    if (c.req.header('x-passo-api-version') !== '2') throw new ApiError(404, 'Use API v2');
+    if (process.env.TRAVEL_EDITING_ENABLED === 'false')
+      throw new ApiError(403, 'Le modifiche al programma sono momentaneamente disattivate.');
+    const operation = z.enum(['preview', 'apply']).parse(c.req.param('operation'));
+    return result(
+      c,
+      await service().travel(
+        id(c),
+        TravelCommandSchema.parse(await c.req.json()),
+        c.req.header('X-Trip-Version'),
+        operation === 'preview',
+      ),
+    );
+  });
   app.get(`${prefix}/trips`, async (c) => c.json(await service().list()));
   app.post(`${prefix}/trips`, async (c) => {
     agent(c);
@@ -175,7 +222,8 @@ export function createApp(injected?: TripService) {
     const plan = PlanSchema.parse(await c.req.json());
     if (c.req.query('dryRun') === 'true') {
       const value = await service().read(id(c));
-      if (c.req.header('X-Trip-Version') !== value.etag) throw new ApiError(412, 'The document changed');
+      if (c.req.header('X-Trip-Version') !== value.etag)
+        throw new ApiError(412, 'The document changed');
       const preview = TripSchema.parse({ ...value.trip, plan });
       return c.json({
         valid: true,
@@ -256,7 +304,11 @@ export function createApp(injected?: TripService) {
   app.patch(`${prefix}/trips/:id/progress/:stepId`, async (c) => {
     const stepId = id(c, 'stepId');
     const body = z
-      .object({ status: ProgressStatus, expected: ProgressStatus.optional() })
+      .object({
+        status: ProgressStatus,
+        expected: ProgressStatus.optional(),
+        at: z.iso.datetime({ offset: true }).optional(),
+      })
       .strict()
       .parse(await c.req.json());
     return result(
@@ -267,6 +319,11 @@ export function createApp(injected?: TripService) {
         if (body.expected && (draft.state.progress[stepId] ?? 'pending') !== body.expected)
           throw new ApiError(409, 'Progress changed on another device');
         draft.state.progress[stepId] = body.status;
+        if (draft.travel) {
+          if (body.status === 'done')
+            draft.travel.completedAt[stepId] = body.at ?? new Date().toISOString();
+          else delete draft.travel.completedAt[stepId];
+        }
       }),
     );
   });
@@ -421,13 +478,28 @@ export function createApp(injected?: TripService) {
     return result(c, value);
   });
   app.notFound((c) => c.json({ error: 'Endpoint not found' }, 404));
-  return app;
+  // Route both versions through the same authenticated handlers. Strip the internal
+  // version marker on incoming requests so legacy clients cannot forge it.
+  const root = new Hono();
+  root.all('*', async (c) => {
+    const url = new URL(c.req.url),
+      headers = new Headers(c.req.raw.headers);
+    headers.delete('x-passo-api-version');
+    if (url.pathname.startsWith('/api/v2/')) {
+      url.pathname = url.pathname.replace('/api/v2/', '/api/v1/');
+      headers.set('x-passo-api-version', '2');
+    }
+    return app.fetch(new Request(url, new Request(c.req.raw, { headers })));
+  });
+  return root;
 }
 
 export function openapi() {
   const security = [{ AgentToken: [] }, { BrowserSession: [] }];
   const responses = {
     '200': { description: 'Success' },
+    '409': { description: 'Relevant day or note changed; review the conflict' },
+    '426': { description: 'Legacy client must upgrade before reading a V2 trip' },
     '401': { description: 'Authentication required' },
     '412': { description: 'Stale ETag; re-read and merge' },
     '422': { description: 'Validation failed' },
@@ -447,6 +519,10 @@ export function openapi() {
       ['get', 'put', 'patch'],
       'Agent plan editing; PUT Plan, PATCH RFC6902. X-Trip-Version required. PUT ?dryRun=true validates',
     ],
+    ['/trips/{id}/travel/preview', ['post'], 'Validate a travel command without writing'],
+    ['/trips/{id}/travel/apply', ['post'], 'Commit an idempotent travel command; browser or agent'],
+    ['/trips/{id}/travel/original', ['get'], 'Read immutable authored plan'],
+    ['/trips/{id}/travel/history', ['get'], 'Last 20 travel changes'],
     ['/trips/{id}/history', ['get'], 'Agent reads available plan snapshots'],
     [
       '/trips/{id}/rates',
@@ -502,6 +578,8 @@ export function openapi() {
       ]),
     );
   const bodySchemas: Record<string, unknown> = {
+    'post /trips/{id}/travel/preview': { $ref: '#/components/schemas/TravelCommand' },
+    'post /trips/{id}/travel/apply': { $ref: '#/components/schemas/TravelCommand' },
     'post /session': z.toJSONSchema(z.object({ key: z.string() })),
     'post /trips': z.toJSONSchema(z.object({ id: Id, plan: PlanSchema })),
     'put /trips/{id}/plan': { $ref: '#/components/schemas/Plan' },
@@ -520,7 +598,11 @@ export function openapi() {
       },
     },
     'patch /trips/{id}/progress/{stepId}': z.toJSONSchema(
-      z.object({ status: ProgressStatus, expected: ProgressStatus.optional() }),
+      z.object({
+        status: ProgressStatus,
+        expected: ProgressStatus.optional(),
+        at: z.iso.datetime({ offset: true }).optional(),
+      }),
     ),
     'patch /trips/{id}/tasks/{taskId}': z.toJSONSchema(
       z.object({ done: z.boolean(), expected: z.boolean().optional() }),
@@ -543,6 +625,7 @@ export function openapi() {
       if (
         method !== 'get' &&
         path.includes('{id}') &&
+        !path.endsWith('/travel/preview') &&
         !path.endsWith('/rates') &&
         !path.endsWith('/finalize') &&
         !path.endsWith('/file')
@@ -558,8 +641,8 @@ export function openapi() {
   }
   return {
     openapi: '3.1.0',
-    info: { title: 'Passo itinerary API', version: '1.0.0' },
-    servers: [{ url: prefix }],
+    info: { title: 'Passo itinerary API', version: '2.0.0' },
+    servers: [{ url: '/api/v2' }],
     paths,
     components: {
       securitySchemes: {
@@ -567,6 +650,7 @@ export function openapi() {
         BrowserSession: { type: 'apiKey', in: 'cookie', name: 'passo_session' },
       },
       schemas: {
+        TravelCommand: z.toJSONSchema(TravelCommandSchema),
         Trip: z.toJSONSchema(TripSchema),
         Plan: z.toJSONSchema(PlanSchema),
         Ticket: z.toJSONSchema(TicketSchema),

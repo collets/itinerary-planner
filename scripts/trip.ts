@@ -14,6 +14,12 @@ import {
   type Plan,
 } from '../src/domain/schema';
 import { bookingWarnings } from '../src/domain/trip';
+import {
+  applyTravel,
+  preconditions,
+  TravelCommandSchema,
+  TravelActionSchema,
+} from '../src/domain/travel';
 import { openapi } from '../src/server/app';
 
 config({ path: process.env.ITINERARY_ENV_FILE ?? '.env.local', quiet: true });
@@ -28,7 +34,7 @@ const flag = (name: string) =>
 const command = args[0],
   tripId = args[1];
 const base =
-  (process.env.ITINERARY_API_URL ?? 'http://localhost:5173').replace(/\/$/, '') + '/api/v1';
+  (process.env.ITINERARY_API_URL ?? 'http://localhost:5173').replace(/\/$/, '') + '/api/v2';
 const token = process.env.ITINERARY_API_TOKEN;
 const headers = () => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' });
 async function request(path: string, method = 'GET', body?: unknown, etag?: string) {
@@ -62,7 +68,7 @@ async function edit(change: (plan: Plan) => void) {
   const value = await current();
   const plan = structuredClone(value.trip.plan);
   change(plan);
-  validate(plan, value.trip.state);
+  TripSchema.parse({ ...value.trip, plan });
   const diff = patch.compare(value.trip.plan, plan);
   if (argv.includes('--dry-run'))
     return output({ diff, warnings: bookingWarnings({ ...value.trip, plan }) });
@@ -71,6 +77,34 @@ async function edit(change: (plan: Plan) => void) {
 
 try {
   switch (command) {
+    case 'travel': {
+      const value = await current();
+      const raw = await file(args[2]);
+      const action = TravelActionSchema.parse(raw.action ?? raw);
+      const command = TravelCommandSchema.parse({
+        id: raw.id ?? crypto.randomUUID(),
+        action,
+        routes: raw.routes ?? [],
+        at: raw.at ?? new Date().toISOString(),
+        expected: raw.expected ?? preconditions(value.trip, action),
+      });
+      applyTravel(value.trip, command);
+      output(
+        await request(
+          `/trips/${tripId}/travel/${argv.includes('--dry-run') ? 'preview' : 'apply'}`,
+          'POST',
+          command,
+          value.etag,
+        ),
+      );
+      break;
+    }
+    case 'travel-history':
+      output(await request(`/trips/${tripId}/travel/history`));
+      break;
+    case 'original':
+      output(await request(`/trips/${tripId}/travel/original`));
+      break;
     case 'list':
       output(await request('/trips'));
       break;
@@ -112,7 +146,7 @@ try {
       const value = await current();
       const input = await file(args[2]);
       const plan = PlanSchema.parse(input.plan ?? input);
-      validate(plan, value.trip.state);
+      TripSchema.parse({ ...value.trip, plan });
       output({
         diff: patch.compare(value.trip.plan, plan),
         warnings: bookingWarnings({ ...value.trip, plan }),

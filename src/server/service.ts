@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { TripSchema, emptyState, type Trip, type Plan } from '../domain/schema.js';
 import { ApiError, type Storage } from './storage.js';
+import { applyTravel, fixedStart, TravelError, type TravelCommand } from '../domain/travel.js';
 
 export class TripService {
   constructor(public store: Storage) {}
@@ -59,6 +60,26 @@ export class TripService {
       throw new ApiError(412, 'The document changed. Pull again before editing.');
     const before = structuredClone(trip);
     change(trip);
+    if (before.travel) {
+      if (JSON.stringify(before.travel.originalPlan) !== JSON.stringify(trip.travel?.originalPlan))
+        throw new ApiError(409, 'The original plan is immutable after travel editing begins');
+      for (const previous of before.plan.steps) {
+        const next = trip.plan.steps.find((s) => s.id === previous.id);
+        if (!next)
+          throw new ApiError(
+            409,
+            'Keep archived steps; remove them from the active sequence instead',
+          );
+        if (
+          before.state.progress[previous.id] === 'done' &&
+          (next.start !== previous.start || next.end !== previous.end)
+        )
+          throw new ApiError(409, 'Completed activity times are protected');
+        const fixed = next.start !== previous.start ? fixedStart(before, previous) : undefined;
+        if (fixed && next.start !== previous.start && Date.parse(next.start) !== Date.parse(fixed))
+          throw new ApiError(409, 'Booked and fixed times are protected');
+      }
+    }
     trip.revision++;
     trip.updatedAt = new Date().toISOString();
     // Deleting an unattached step/task clears its obsolete progress; attachments are validated.
@@ -86,6 +107,22 @@ export class TripService {
       );
     }
     return { trip: valid, etag: nextEtag };
+  }
+  async travel(id: string, command: TravelCommand, expected?: string, preview = false) {
+    const current = await this.read(id);
+    if (current.trip.travel?.appliedIds.includes(command.id)) return current;
+    if (!preview && !expected) throw new ApiError(428, 'X-Trip-Version is required');
+    if (!preview && current.etag !== expected) throw new ApiError(412, 'The document changed');
+    let draft: Trip;
+    try {
+      draft = applyTravel(current.trip, command);
+    } catch (error) {
+      if (error instanceof TravelError)
+        throw new ApiError(error.code === 'conflict' ? 409 : 422, error.message);
+      throw error;
+    }
+    if (preview) return { trip: draft, etag: current.etag };
+    return this.mutate(id, current.etag, (value) => Object.assign(value, draft), true);
   }
   async delete(id: string, expected: string | undefined) {
     if (!expected) throw new ApiError(428, 'X-Trip-Version is required');

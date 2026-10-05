@@ -105,7 +105,7 @@ export function OfflineDialog({ onClose }: { onClose: () => void }) {
           onClick={() => {
             if (
               confirm(
-                'Rimuovere la copia offline da questo telefono? Il viaggio online resta disponibile.',
+                'Rimuovere i file offline da questo telefono? Il viaggio online e le modifiche non sincronizzate restano conservati.',
               )
             )
               void forgetTrip(trip.id).then(() => {

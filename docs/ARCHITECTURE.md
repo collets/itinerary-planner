@@ -45,3 +45,11 @@ The access key and separate agent token are random secrets whose SHA-256 hashes 
 - A dedicated MCP adapter around the existing documented API.
 
 Current source-derived routing is a written guide with Google Maps handoff, not verified turn-by-turn navigation. Ticket availability and source opening hours must be rechecked before booking. The app does not promise up-to-the-minute availability or automatic replanning.
+
+## Offline travel editing
+
+Pure commands in `src/domain/travel.ts` are shared by the UI and API. The UI previews locally, then commits its command and intended result to IndexedDB before reporting success. Dexie version 2 adds `travelCommands` without deleting trips, session metadata, files or legacy pending progress/tasks. Travel and operational changes form one chronological journal per trip. Networking never runs inside IndexedDB transactions.
+
+Sync reads the shared document, checks relevant command preconditions, and applies with storage CAS. An acknowledged ID is removed from the local queue atomically with the updated cached document. Independent changes merge. A relevant conflict pauses that trip's journal, preserves its local result, and shows both versions. Reviewing loads fresh shared data into the editor and requires a new preview and confirmation. Discarding a command preserves subsequent dependent commands for explicit review. Temporary network failures retain the queue; reconnect, refresh, or a pending-only timer retries. New changes can still be queued offline. Files stay independent from the edit queue.
+
+The app's service worker caches the application shell, not private API responses. Local cached data plus queued commands render the active itinerary after offline reload. Ticket downloads remain explicit. The authored baseline and undo history are available offline with the trip. No silent latest-write-wins policy is used for overlapping edits.

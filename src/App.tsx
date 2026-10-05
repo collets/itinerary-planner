@@ -85,7 +85,7 @@ export default function App() {
     if (auth === 'in' && online) void syncPending();
   }, [online, auth]);
   const signOut = async () => {
-    const pending = await db.pending.count();
+    const pending = (await db.pending.count()) + (await db.travelCommands.count());
     if (
       pending &&
       !confirm(

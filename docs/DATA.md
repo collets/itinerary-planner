@@ -101,3 +101,47 @@ pnpm trip delete my-trip --confirm=my-trip
 ```
 
 The server retains the last 20 snapshots before plan edits. Restore changes the plan only and preserves current operational state; validation rejects a historical plan incompatible with current attachments. Progress and booking changes are not a permanent audit log. Full exports contain metadata, not binary ticket contents; download originals separately for a full backup. Deletion removes cloud data, but disconnected devices can retain their explicit downloads until they reconnect or users clear them.
+
+## Travel editing (schema version 2)
+
+The first travel command upgrades a version 1 trip in place. `plan` is the active schedule and a catalog of all retained stops, routes, and places. `plan.days[].stepIds` is the authoritative active sequence; catalog entries outside it are archived, with reservations and tickets still attached by stable IDs. A day may be empty. Both views and Maps use this same active schedule.
+
+`travel.originalPlan` is the immutable authored baseline. `travel.notes` stores shared plain-text notes keyed by day/step ID; `travel.locks` stores manually fixed start instants; `travel.completedAt` records actual completion timestamps separately from the planned schedule. Booked reservations with a slot and flight legs are automatic anchors. `travel.appliedIds` retains acknowledged command IDs for retry deduplication. `travel.history` retains the last 20 commands with before snapshots and relevant after fingerprints for safe undo.
+
+Do not remove catalog records or original days from a V2 document. To remove a visit from the active itinerary, use a `skip` command. Full agent plan edits preserve operational state and cannot change completed times, booked/fixed times, or the original baseline. They still need a fresh `X-Trip-Version`. Agent edits and restores can make old undo actions conflict; review instead of overwriting.
+
+### Agent interface
+
+```sh
+pnpm trip original my-trip
+pnpm trip travel-history my-trip
+pnpm trip travel my-trip local-data/change.json --dry-run
+pnpm trip travel my-trip local-data/change.json
+```
+
+A change file accepts `{action, routes?}`. Example:
+
+```json
+{
+  "action": { "type": "delay", "dayId": "day-one", "stepId": "museum", "minutes": 30 },
+  "routes": []
+}
+```
+
+Supported action shapes (all IDs refer to existing catalog/day records unless adding):
+
+| Type      | Fields                                                                                                                           |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `delay`   | `dayId`, `stepId`, `minutes` (positive integer)                                                                                  |
+| `timing`  | `dayId`, `stepId`, `start?`, `durationMinutes?`, `following`; alternatively `leaveAt` closes the activity and records completion |
+| `skip`    | `dayId`, `stepId`, `included`, `afterId?`, `acknowledgedBooking`                                                                 |
+| `move`    | `dayId`, `stepId`, `toDayId`, `afterId?` (same day changes order)                                                                |
+| `add`     | `dayId`, `stop` (complete Stop schema), `place?` (new Place), `afterId?`                                                         |
+| `note`    | `targetId` (day or step), `text` (max 4000 characters)                                                                           |
+| `lock`    | `dayId`, `stepId`, `fixed`                                                                                                       |
+| `restore` | `dayId`                                                                                                                          |
+| `undo`    | `historyId`                                                                                                                      |
+
+Omitting `afterId` inserts at the beginning. A modified connection requires `routes: [{fromPlaceId,toPlaceId,mode,durationMinutes}]`, with mode `walk`, `transit`, `taxi`, or `train`. These are explicit provisional estimates. Generated routes contain no copied streets, POIs, coordinates, or source claims. Matching authored connections can be reused. Opening Maps still requires connectivity.
+
+Delays preserve durations and absorb existing gaps before moving later activities. Fixed and completed activities cannot shift. Invalid overlaps, midnight crossings, or insufficient space before an anchor produce an error, with no partial write. Restore preserves notes, completed visits, reservations, payments and files; it can require route estimates for visits moved into another day. Undo is permitted only while the relevant day/note still matches its recorded after state. Original budget estimates remain labelled as such; a skipped visit does not imply a refund, and newly added stops have unknown cost.

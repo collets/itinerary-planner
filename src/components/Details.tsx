@@ -27,6 +27,7 @@ import {
   navigationSegments,
 } from '../domain/trip';
 import type { Step } from '../domain/schema';
+import { archivedSteps } from '../domain/travel';
 import { ViewSwitch } from './Overview';
 import { EuroEstimate } from './EuroEstimate';
 
@@ -66,21 +67,26 @@ export function SourceList({ ids }: { ids: string[] }) {
   );
 }
 export function Details() {
-  const { trip, changeProgress, notify } = useTrip();
+  const { trip, changeProgress, notify, edit, editing } = useTrip();
   const { stepId } = useParams();
   const navigate = useNavigate();
   const steps = orderedSteps(trip.plan),
     index = steps.findIndex((s) => s.id === stepId),
-    step = steps[index];
+    step = trip.plan.steps.find((s) => s.id === stepId);
   const touch = useRef<{ x: number; y: number } | null>(null);
   useEffect(() => {
     window.scrollTo(0, 0);
     sessionStorage.setItem(`passo:last-step:${trip.id}`, stepId ?? '');
   }, [stepId, trip.id]);
   if (!step) return <ErrorPanel message="Questa tappa non è più nel programma." />;
-  const day = trip.plan.days.find((d) => d.stepIds.includes(step.id))!;
+  const day =
+    trip.plan.days.find((d) => d.stepIds.includes(step.id)) ??
+    trip.plan.days.find((d) => archivedSteps(trip, d.id).some((s) => s.id === step.id)) ??
+    trip.plan.days[0];
+  const archived = index < 0;
   const zone = step.timezone ?? trip.plan.timezone;
   const move = (delta: number) => {
+    if (archived) return;
     const next = steps[index + delta];
     if (next) navigate(`/trips/${trip.id}/steps/${next.id}`, { replace: true });
   };
@@ -97,9 +103,7 @@ export function Details() {
       <ViewSwitch stepId={step.id} active="detail" />
       <div className="detail-position">
         <span>{dayLabel(day.date)}</span>
-        <span>
-          {index + 1} / {steps.length}
-        </span>
+        <span>{archived ? 'Fuori programma' : `${index + 1} / ${steps.length}`}</span>
       </div>
       <article
         className="focus-content"
@@ -185,30 +189,48 @@ export function Details() {
             </a>
           )}
         </div>
-        <div className="progress-controls" aria-label="Stato della tappa">
+        {editing && (
           <button
-            className={status === 'done' ? 'active' : ''}
-            onClick={() => {
-              void changeProgress(step.id, status === 'done' ? 'pending' : 'done').catch((e) =>
-                notify(e.message),
-              );
-            }}
+            className="button subtle full"
+            onClick={() =>
+              edit({
+                dayId: day.id,
+                stepId: step.id,
+                mode: archived && step.kind === 'stop' ? 'skip' : undefined,
+              })
+            }
           >
-            <Check size={16} />
-            {step.kind === 'leg' ? 'Percorso completato' : 'Visitata'}
+            {archived ? 'Reinserisci o annota' : 'Adatta questa tappa'}
           </button>
-          <button
-            className={status === 'skipped' ? 'active' : ''}
-            onClick={() => {
-              void changeProgress(step.id, status === 'skipped' ? 'pending' : 'skipped').catch(
-                (e) => notify(e.message),
-              );
-            }}
-          >
-            <SkipForward size={16} />
-            Saltata
-          </button>
-        </div>
+        )}
+        {trip.travel?.notes[step.id] && <p className="travel-note">{trip.travel.notes[step.id]}</p>}
+        {!costs.length &&
+          trip.travel &&
+          !trip.travel.originalPlan.steps.some((s) => s.id === step.id) &&
+          step.kind === 'stop' && (
+            <p className="small muted">Costo da verificare · non incluso nella stima originale.</p>
+          )}
+        {!archived && (
+          <div className="progress-controls" aria-label="Stato della tappa">
+            <button
+              className={status === 'done' ? 'active' : ''}
+              onClick={() => {
+                void changeProgress(step.id, status === 'done' ? 'pending' : 'done').catch((e) =>
+                  notify(e.message),
+                );
+              }}
+            >
+              <Check size={16} />
+              {step.kind === 'leg' ? 'Percorso completato' : 'Visitata'}
+            </button>
+            {step.kind === 'stop' && editing && status !== 'done' && (
+              <button onClick={() => edit({ dayId: day.id, stepId: step.id, mode: 'skip' })}>
+                <SkipForward size={16} />
+                Salta tappa
+              </button>
+            )}
+          </div>
+        )}
         {place ? (
           <>
             <section className="detail-section">
@@ -342,23 +364,25 @@ export function Details() {
           ]}
         />
       </article>
-      <nav className="step-navigation" aria-label="Scorri le tappe">
-        <button onClick={() => move(-1)} disabled={index === 0} aria-label="Tappa precedente">
-          <ArrowLeft size={18} />
-          <span>Precedente</span>
-        </button>
-        <span className="step-counter">
-          {index + 1} / {steps.length}
-        </span>
-        <button
-          onClick={() => move(1)}
-          disabled={index === steps.length - 1}
-          aria-label="Tappa successiva"
-        >
-          <span>Successiva</span>
-          <ArrowRight size={18} />
-        </button>
-      </nav>
+      {!archived && (
+        <nav className="step-navigation" aria-label="Scorri le tappe">
+          <button onClick={() => move(-1)} disabled={index === 0} aria-label="Tappa precedente">
+            <ArrowLeft size={18} />
+            <span>Precedente</span>
+          </button>
+          <span className="step-counter">
+            {archived ? 'Fuori programma' : `${index + 1} / ${steps.length}`}
+          </span>
+          <button
+            onClick={() => move(1)}
+            disabled={index === steps.length - 1}
+            aria-label="Tappa successiva"
+          >
+            <span>Successiva</span>
+            <ArrowRight size={18} />
+          </button>
+        </nav>
+      )}
     </main>
   );
 }

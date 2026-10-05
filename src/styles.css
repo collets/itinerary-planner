@@ -2295,3 +2295,195 @@ legend {
     transition: none !important;
   }
 }
+
+/* Travel controls stay secondary to the itinerary. */
+.day-edit-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 12px 0;
+}
+.stop-row {
+  position: relative;
+  padding-bottom: 34px;
+}
+.step-edit-button {
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--line, #ded8ce);
+  border-radius: 20px;
+  color: var(--muted, #6d6c60);
+  font-size: 12px;
+  background: transparent;
+}
+.fixed-label {
+  position: absolute;
+  left: calc(72px + 20px);
+  bottom: 15px;
+  font-size: 11px;
+  color: #8c622d;
+}
+.travel-note {
+  white-space: pre-wrap;
+  background: #f5eedb;
+  border-left: 3px solid #b49758;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 16px 0;
+  overflow-wrap: anywhere;
+}
+.archived-stops {
+  padding: 14px;
+  background: #f0eee7;
+  border-radius: 12px;
+  margin-top: 20px;
+}
+.archived-stops summary {
+  cursor: pointer;
+  font-weight: 600;
+  min-height: 32px;
+}
+.archived-stops a {
+  display: block;
+  padding: 12px 0;
+}
+.archived-stops small,
+.history-row small {
+  display: block;
+  color: var(--muted, #737365);
+  font-size: 12px;
+  margin-top: 4px;
+}
+.empty-day {
+  padding: 24px;
+  color: var(--muted, #737365);
+}
+.travel-editor {
+  display: grid;
+  gap: 16px;
+}
+.travel-editor label {
+  display: grid;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.travel-editor input,
+.travel-editor select,
+.travel-editor textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px;
+  border: 1px solid #d5d2c5;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #29372c;
+  font: inherit;
+}
+.travel-editor .checkbox-row {
+  display: flex;
+  align-items: center;
+  font-weight: 400;
+}
+.travel-editor .checkbox-row input {
+  width: 20px;
+  min-height: 20px;
+  flex-shrink: 0;
+}
+.editor-shortcuts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.route-estimate {
+  border: 1px dashed #b49a64;
+  border-radius: 12px;
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.route-estimate legend {
+  font-size: 14px;
+  font-weight: 600;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.schedule-preview {
+  border-radius: 12px;
+  border: 1px solid #d6dfd1;
+  padding: 16px;
+  background: #f5f8ef;
+}
+.schedule-preview ol {
+  padding: 0;
+  list-style: none;
+}
+.schedule-preview li {
+  display: grid;
+  gap: 4px;
+  padding: 9px 0;
+  border-bottom: 1px solid #dde4d6;
+  font-size: 13px;
+}
+.schedule-preview del {
+  color: #777;
+  font-size: 12px;
+}
+.history-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #ddd;
+}
+.history-row .button {
+  font-size: 12px;
+}
+.original-list {
+  padding-left: 20px;
+  font-size: 13px;
+}
+.original-list li {
+  padding: 6px 0;
+}
+.sync-panel {
+  max-width: 960px;
+  margin: 12px auto;
+  padding: 12px 20px;
+  font-size: 13px;
+  background: #f0f4e9;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.sync-panel p {
+  margin: 4px 0;
+}
+.sync-panel.needs-review {
+  background: #fff0d7;
+}
+.staging-bar {
+  text-align: center;
+  background: #46566b;
+  color: white;
+  padding: 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+@media (max-width: 600px) {
+  .fixed-label {
+    left: 76px;
+  }
+  .travel-editor .button {
+    min-height: 44px;
+  }
+  .schedule-preview {
+    padding: 12px;
+  }
+}

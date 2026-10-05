@@ -159,9 +159,15 @@ export function Preparations() {
         <div className="panel-heading">
           <h2>
             <Wallet size={20} />
-            Quanto mettere in conto
+            {trip.travel ? 'Stima del programma originale' : 'Quanto mettere in conto'}
           </h2>
         </div>
+        {trip.travel && (
+          <p className="small muted">
+            Saltare una visita non implica un rimborso. Le nuove tappe hanno un costo da verificare
+            e non sono incluse nella stima.
+          </p>
+        )}
         {Object.entries(sums).map(([currency, sum]) => (
           <div className="budget-total" key={currency}>
             <span className="eyebrow">STIMA PER {trip.plan.travellers.length} PERSONE</span>

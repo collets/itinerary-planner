@@ -15,10 +15,11 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useTrip } from '../client/context';
+import { archivedSteps, activeIds, fixedStart } from '../domain/travel';
 import { currentStep, dayLabel, time } from '../domain/trip';
 import type { Step } from '../domain/schema';
 
-export function ViewSwitch({ stepId, active }: { stepId: string; active: 'overview' | 'detail' }) {
+export function ViewSwitch({ stepId, active }: { stepId?: string; active: 'overview' | 'detail' }) {
   const { trip } = useTrip();
   const base = `/trips/${trip.id}`;
   return (
@@ -27,19 +28,21 @@ export function ViewSwitch({ stepId, active }: { stepId: string; active: 'overvi
         <Layers size={15} />
         Vista completa
       </Link>
-      <Link className={active === 'detail' ? 'selected' : ''} to={`${base}/steps/${stepId}`}>
-        <Compass size={15} />
-        Una tappa
-      </Link>
+      {stepId && (
+        <Link className={active === 'detail' ? 'selected' : ''} to={`${base}/steps/${stepId}`}>
+          <Compass size={15} />
+          Una tappa
+        </Link>
+      )}
     </div>
   );
 }
 export function Overview() {
-  const { trip } = useTrip();
+  const { trip, edit, editing } = useTrip();
   const navigate = useNavigate();
   const sections = useRef<Record<string, HTMLElement | null>>({});
   const [activeDay, setActiveDay] = useState(trip.plan.days[0].id);
-  const current = currentStep(trip)!;
+  const current = currentStep(trip);
   const scrollKey = `passo:overview:${trip.id}`;
   useEffect(() => {
     const saved = sessionStorage.getItem(scrollKey);
@@ -111,14 +114,17 @@ export function Overview() {
         <ViewSwitch
           stepId={
             trip.plan.steps.find(
-              (s) => s.id === sessionStorage.getItem(`passo:last-step:${trip.id}`),
-            )?.id ?? current.id
+              (s) =>
+                s.id === sessionStorage.getItem(`passo:last-step:${trip.id}`) &&
+                activeIds(trip).has(s.id),
+            )?.id ?? current?.id
           }
           active="overview"
         />
         <button
           className="now-link"
-          onClick={() => navigate(`/trips/${trip.id}/steps/${current.id}`)}
+          disabled={!current}
+          onClick={() => current && navigate(`/trips/${trip.id}/steps/${current.id}`)}
         >
           Adesso <ArrowUpRight size={16} />
         </button>
@@ -161,12 +167,41 @@ export function Overview() {
               <p>{day.summary}</p>
             </div>
           </div>
+          {editing && (
+            <div className="day-edit-row">
+              <button className="button subtle" onClick={() => edit({ dayId: day.id })}>
+                Adatta la giornata
+              </button>
+            </div>
+          )}
+          {trip.travel?.notes[day.id] && <p className="travel-note">{trip.travel.notes[day.id]}</p>}
+          {!day.stepIds.length && (
+            <p className="empty-day">
+              Giornata libera. Aggiungi una tappa o riprendi una visita dal diario.
+            </p>
+          )}
           <div className="timeline">
             {day.stepIds.map((id) => {
               const step = trip.plan.steps.find((s) => s.id === id)!;
               return <TimelineStep key={id} step={step} />;
             })}
           </div>
+          {!!archivedSteps(trip, day.id).filter((s) => s.kind === 'stop').length && (
+            <details className="archived-stops">
+              <summary>
+                Tappe fuori programma ·{' '}
+                {archivedSteps(trip, day.id).filter((s) => s.kind === 'stop').length}
+              </summary>
+              {archivedSteps(trip, day.id)
+                .filter((s) => s.kind === 'stop')
+                .map((s) => (
+                  <Link key={s.id} to={`/trips/${trip.id}/steps/${s.id}`}>
+                    {s.title}
+                    <small>Dettagli e biglietti →</small>
+                  </Link>
+                ))}
+            </details>
+          )}
           <div className="day-end">
             <span />
             <p>
@@ -192,11 +227,18 @@ export function Overview() {
   );
 }
 function TimelineStep({ step }: { step: Step }) {
-  const { trip } = useTrip();
+  const { trip, edit, editing } = useTrip();
   const done = trip.state.progress[step.id] === 'done',
     skipped = trip.state.progress[step.id] === 'skipped';
   const zone = step.timezone ?? trip.plan.timezone;
   const url = `/trips/${trip.id}/steps/${step.id}`;
+  const dayId = trip.plan.days.find((d) => d.stepIds.includes(step.id))!.id;
+  let fixed = false;
+  try {
+    fixed = Boolean(fixedStart(trip, step));
+  } catch {
+    fixed = true;
+  }
   const tickets = trip.state.tickets.filter((t) => t.stepId === step.id && t.status === 'ready');
   const booked = trip.state.reservations.find((r) => r.stepId === step.id && r.status === 'booked');
   if (step.kind === 'leg')
@@ -221,6 +263,7 @@ function TimelineStep({ step }: { step: Step }) {
                   : 'Trasferimento'}{' '}
               <span>· circa {step.durationMinutes} min</span>
             </strong>
+            {step.estimate && <span className="poi-count">Tempo provvisorio</span>}
             {step.pois.length > 0 && (
               <span className="poi-count">
                 <Camera size={13} />
@@ -268,6 +311,16 @@ function TimelineStep({ step }: { step: Step }) {
           )}
         </div>
       </Link>
+      {fixed && <span className="fixed-label">Orario fisso</span>}
+      {editing && (
+        <button
+          className="step-edit-button"
+          aria-label={`Adatta ${step.title}`}
+          onClick={() => edit({ dayId, stepId: step.id })}
+        >
+          Adatta
+        </button>
+      )}
     </div>
   );
 }

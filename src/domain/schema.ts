@@ -236,18 +236,53 @@ export const StateSchema = z
       .default([]),
   })
   .strict();
+const TravelSnapshotSchema = z
+  .object({
+    plan: PlanSchema,
+    notes: z.record(Id, z.string()),
+    locks: z.record(Id, Timestamp),
+    completedAt: z.record(Id, Timestamp),
+    progress: z.record(Id, ProgressStatus),
+  })
+  .strict();
+export const TravelSchema = z
+  .object({
+    originalPlan: PlanSchema,
+    notes: z.record(Id, z.string()).default({}),
+    locks: z.record(Id, Timestamp).default({}),
+    completedAt: z.record(Id, Timestamp).default({}),
+    appliedIds: z.array(Id).default([]),
+    history: z
+      .array(
+        z
+          .object({
+            id: Id,
+            title: z.string(),
+            at: Timestamp,
+            before: TravelSnapshotSchema,
+            after: z.record(z.string(), z.string()),
+          })
+          .strict(),
+      )
+      .max(20)
+      .default([]),
+  })
+  .strict();
 export const TripSchema = z
   .object({
-    schemaVersion: z.literal('1'),
+    schemaVersion: z.enum(['1', '2']),
     id: Id,
     revision: z.number().int().min(1),
     updatedAt: Timestamp,
     plan: PlanSchema,
     state: StateSchema,
+    travel: TravelSchema.optional(),
   })
   .strict()
   .superRefine((trip, ctx) => {
     const issue = (message: string) => ctx.addIssue({ code: 'custom', message });
+    if ((trip.schemaVersion === '2') !== !!trip.travel)
+      issue('Travel state requires schema version 2');
     const p = trip.plan;
     for (const [name, items] of Object.entries({
       travellers: p.travellers,
@@ -264,6 +299,32 @@ export const TripSchema = z
       const ids = items.map((v) => v.id);
       if (new Set(ids).size !== ids.length) issue(`Duplicate ${name} ID`);
     }
+    if (trip.travel) {
+      const baseline = TripSchema.safeParse({
+        schemaVersion: '1',
+        id: trip.id,
+        revision: 1,
+        updatedAt: trip.updatedAt,
+        plan: trip.travel.originalPlan,
+        state: emptyState(),
+      });
+      if (!baseline.success) issue('Invalid original plan');
+      const stepIds = new Set(p.steps.map((s) => s.id)),
+        dayIds = new Set(p.days.map((d) => d.id));
+      for (const key of [
+        ...Object.keys(trip.travel.locks),
+        ...Object.keys(trip.travel.completedAt),
+      ])
+        if (!stepIds.has(key)) issue('Unknown travel step');
+      for (const key of Object.keys(trip.travel.notes))
+        if (!stepIds.has(key) && !dayIds.has(key)) issue('Unknown travel note target');
+      for (const s of trip.travel.originalPlan.steps)
+        if (!stepIds.has(s.id)) issue('Original steps must remain in the catalog');
+      for (const d of trip.travel.originalPlan.days)
+        if (!dayIds.has(d.id)) issue('Original days must remain available');
+      if (new Set(trip.travel.appliedIds).size !== trip.travel.appliedIds.length)
+        issue('Duplicate applied command ID');
+    }
     const places = new Set(p.places.map((v) => v.id));
     const steps = new Set(p.steps.map((v) => v.id));
     const travellers = new Set(p.travellers.map((v) => v.id));
@@ -276,7 +337,10 @@ export const TripSchema = z
       });
     if (p.startDate > p.endDate) issue('Trip starts after its end');
     const ordered = p.days.flatMap((d) => d.stepIds);
-    if (ordered.length !== steps.size || new Set(ordered).size !== ordered.length)
+    if (
+      (trip.schemaVersion === '1' && ordered.length !== steps.size) ||
+      new Set(ordered).size !== ordered.length
+    )
       issue('Every step must appear exactly once in the days');
     let lastDate = '';
     for (const d of p.days) {

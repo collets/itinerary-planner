@@ -229,3 +229,91 @@ describe('euro exchange rates', () => {
     expect((await exchangeRate('PLN', service.store)).asOf).toBe('2026-10-02');
   });
 });
+
+describe('version 2 travel API', () => {
+  it('allows authenticated browser previews, commits with CAS and deduplicates retries', async () => {
+    const { preconditions } = await import('../src/domain/travel');
+    const initial = await service.read('example-trip');
+    const action = { type: 'delay' as const, dayId: 'day-one', stepId: 'square', minutes: 30 };
+    const command = {
+      id: crypto.randomUUID(),
+      action,
+      routes: [],
+      expected: preconditions(initial.trip, action),
+      at: new Date().toISOString(),
+    };
+    const session = await call('/api/v2/session', 'POST', { key }, undefined, {
+      Origin: 'http://localhost',
+    });
+    const cookie = session.headers.get('set-cookie')!.split(';')[0];
+    const browser = (operation: string, etag?: string) =>
+      app.request(`http://localhost/api/v2/trips/example-trip/travel/${operation}`, {
+        method: 'POST',
+        headers: {
+          Cookie: cookie,
+          Origin: 'http://localhost',
+          'Content-Type': 'application/json',
+          ...(etag ? { 'X-Trip-Version': etag } : {}),
+        },
+        body: JSON.stringify(command),
+      });
+    expect((await browser('preview')).status).toBe(200);
+    expect((await service.read('example-trip')).etag).toBe(initial.etag);
+    expect((await browser('apply')).status).toBe(428);
+    const saved = await browser('apply', initial.etag);
+    expect(saved.status).toBe(200);
+    const result = await saved.json();
+    expect(result.trip.schemaVersion).toBe('2');
+    const retry = await browser('apply', initial.etag);
+    expect(retry.status).toBe(200);
+    expect((await retry.json()).etag).toBe(result.etag);
+    expect((await call('/api/v1/trips/example-trip')).status).toBe(426);
+    expect(
+      (
+        await call('/api/v1/trips/example-trip', 'GET', undefined, undefined, {
+          'x-passo-api-version': '2',
+        })
+      ).status,
+    ).toBe(426);
+    expect((await call('/api/v2/trips/example-trip/travel/original')).status).toBe(200);
+    expect((await call('/api/v2/trips/example-trip/travel/history')).status).toBe(200);
+  });
+  it('merges an independent note, refuses a stale day, and keeps data readable when editing is disabled', async () => {
+    const { preconditions } = await import('../src/domain/travel');
+    const original = await service.read('example-trip');
+    const delay = { type: 'delay' as const, dayId: 'day-one', stepId: 'square', minutes: 15 };
+    const make = (action: Parameters<typeof preconditions>[1]) => ({
+      id: crypto.randomUUID(),
+      action,
+      routes: [],
+      expected: preconditions(original.trip, action),
+      at: new Date().toISOString(),
+    });
+    const saved = await service.travel(
+      'example-trip',
+      make({ type: 'note', targetId: 'square', text: 'Coffee' }),
+      original.etag,
+    );
+    const committed = await call(
+      '/api/v2/trips/example-trip/travel/apply',
+      'POST',
+      make(delay),
+      saved.etag,
+    );
+    expect(committed.status).toBe(200);
+    const current = await committed.json();
+    const conflicted = await call(
+      '/api/v2/trips/example-trip/travel/apply',
+      'POST',
+      make(delay),
+      current.etag,
+    );
+    expect(conflicted.status).toBe(409);
+    vi.stubEnv('TRAVEL_EDITING_ENABLED', 'false');
+    expect(
+      (await call('/api/v2/trips/example-trip/travel/apply', 'POST', make(delay), current.etag))
+        .status,
+    ).toBe(403);
+    expect((await call('/api/v2/trips/example-trip')).status).toBe(200);
+  });
+});

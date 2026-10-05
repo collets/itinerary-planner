@@ -6,6 +6,7 @@ A mobile-first, Italian itinerary app. Code and documentation are in English. Tr
 
 - Continuous overview of the entire trip with day navigation, visible hours, stop cards and route connectors.
 - Detailed stop/route pages with horizontal swipe navigation, practical information, sources, booking links, street guides, points of interest and external Google Maps directions.
+- Offline travel editing: delays, durations, departure, skip/reinclude, reorder/move, quick stops and shared notes, with preview, fixed booking protection, undo and original-day restore.
 - Shared progress and preparation checklist, including offline edits and explicit conflict resolution.
 - Private PDF/PNG/JPEG tickets (up to 10 MB) assigned to one or several travelers. Booking slots and paid group totals are separate from planned schedules and estimated budgets.
 - Installable web app; explicit downloads save itinerary data and selected original tickets to the current device. PDF rendering assets are cached with the app.
@@ -39,6 +40,8 @@ The browser tests use a separate temporary store and the production build, inclu
 See [data guide](docs/DATA.md), [API reference](docs/API.md), [deployment guide](docs/DEPLOYMENT.md) and [architecture](docs/ARCHITECTURE.md), and [verification notes](docs/TESTING.md).
 
 ```sh
+pnpm trip travel another-trip local-data/change.json --dry-run
+pnpm trip travel another-trip local-data/change.json
 pnpm trip list
 pnpm trip create another-trip local-data/new-trip.yaml
 pnpm trip pull another-trip local-data/new-trip.json

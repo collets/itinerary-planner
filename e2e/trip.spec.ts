@@ -8,21 +8,21 @@ import {
 } from '@playwright/test';
 test.beforeEach(async ({ request }) => {
   const headers = { Authorization: 'Bearer e2e-agent-token' };
-  const old = await request.get('/api/v1/trips/example-trip', { headers });
+  const old = await request.get('/api/v2/trips/example-trip', { headers });
   await expect(old).toBeOK();
   const value = await old.json();
-  const removed = await request.delete('/api/v1/trips/example-trip', {
+  const removed = await request.delete('/api/v2/trips/example-trip', {
     headers: { ...headers, 'X-Trip-Version': value.etag },
   });
   await expect(removed).toBeOK();
   const plan = exampleTrip().plan;
   plan.costs[0] = { ...plan.costs[0], currency: 'PLN', min: 45, max: 55 };
-  const created = await request.post('/api/v1/trips', {
+  const created = await request.post('/api/v2/trips', {
     headers,
     data: { id: 'example-trip', plan },
   });
   await expect(created).toBeOK();
-  const rates = await request.post('/api/v1/trips/example-trip/rates', { headers, data: {} });
+  const rates = await request.post('/api/v2/trips/example-trip/rates', { headers, data: {} });
   await expect(rates).toBeOK();
 });
 const connection = async (
@@ -117,7 +117,7 @@ test('uploads a shared ticket, filters by person, then opens it after an offline
     await page.getByRole('button', { name: 'Aggiorna viaggio' }).click();
   await expect
     .poll(async () => {
-      const response = await page.request.get('/api/v1/trips/example-trip');
+      const response = await page.request.get('/api/v2/trips/example-trip');
       return (await response.json()).trip.state.taskCompletion['book-museum'];
     })
     .toBe(true);
@@ -152,10 +152,10 @@ test('renders an original PDF for the first time while offline', async ({
 }) => {
   const headers = { Authorization: 'Bearer e2e-agent-token' },
     bytes = pdfDocument();
-  const current = await request.get('/api/v1/trips/example-trip', { headers });
+  const current = await request.get('/api/v2/trips/example-trip', { headers });
   await expect(current).toBeOK();
   const value = await current.json();
-  const made = await request.post('/api/v1/trips/example-trip/tickets', {
+  const made = await request.post('/api/v2/trips/example-trip/tickets', {
     headers: { ...headers, 'X-Trip-Version': value.etag },
     data: {
       title: 'PDF offline',
@@ -170,7 +170,7 @@ test('renders an original PDF for the first time while offline', async ({
   const ticket = (await made.json()).trip.state.tickets[0];
   expect(
     (
-      await request.put(`/api/v1/trips/example-trip/tickets/${ticket.id}/file`, {
+      await request.put(`/api/v2/trips/example-trip/tickets/${ticket.id}/file`, {
         headers: { ...headers, 'Content-Type': 'application/pdf' },
         data: bytes,
       })
@@ -197,4 +197,144 @@ test('renders an original PDF for the first time while offline', async ({
   await expect(page.getByRole('alert')).toHaveCount(0);
   await page.getByRole('button', { name: 'Aumenta zoom' }).click();
   await expect(page.getByText('125%', { exact: true })).toBeVisible();
+});
+
+async function confirmEdit(page: Page) {
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Mostra anteprima' }).click();
+  await expect(dialog.getByRole('heading', { name: 'Anteprima del programma' })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Conferma modifica', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+}
+async function download(page: Page) {
+  await page.getByRole('button', { name: 'Salva viaggio offline', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Salva viaggio offline', exact: true })
+    .click();
+  await expect(page.getByText('Download completato', { exact: true })).toBeVisible();
+  await page.getByRole('dialog').getByRole('button', { name: 'Chiudi', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+}
+test('offline reorder, note, archive and reinclude survive reload and sync in order', async ({
+  page,
+  context,
+  browserName,
+  request,
+}) => {
+  await login(page);
+  await download(page);
+  await connection(true, browserName, context, request);
+  await page.getByRole('button', { name: 'Adatta Museo del borgo', exact: true }).click();
+  await page.getByLabel('Tipo di modifica').selectOption('move');
+  await page.getByRole('dialog').getByLabel('Posizione della tappa').selectOption('');
+  await page.getByRole('dialog').getByLabel('Minuti indicativi').fill('10');
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Stima confermata', exact: true })
+    .click();
+  await confirmEdit(page);
+  await expect(page.locator('.stop-card').first()).toContainText('Museo del borgo');
+  await page.getByRole('button', { name: 'Adatta Museo del borgo', exact: true }).click();
+  await page.getByLabel('Tipo di modifica').selectOption('note');
+  await page.getByLabel('Nota condivisa').fill('Ci fermiamo per un caffè');
+  await confirmEdit(page);
+  await page.reload();
+  await expect(page.locator('.stop-card').first()).toContainText('Museo del borgo');
+  await page.getByRole('button', { name: 'Adatta Museo del borgo', exact: true }).click();
+  await page.getByLabel('Tipo di modifica').selectOption('skip');
+  await confirmEdit(page);
+  await expect(page.locator('.stop-card')).toHaveCount(1);
+  await page.locator('.archived-stops summary').click();
+  await page
+    .locator('.archived-stops')
+    .getByRole('link', { name: /Museo del borgo/ })
+    .click();
+  await expect(page.getByText('Ci fermiamo per un caffè', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Reinserisci o annota' }).click();
+  await page.getByLabel('Posizione della tappa').selectOption('');
+  await confirmEdit(page);
+  await page.getByRole('link', { name: 'Vista completa' }).click();
+  await expect(page.locator('.stop-card')).toHaveCount(2);
+  await connection(false, browserName, context, request);
+  await page.getByRole('button', { name: 'Aggiorna viaggio' }).click();
+  await expect
+    .poll(async () => {
+      const r = await page.request.get('/api/v2/trips/example-trip');
+      const t = (await r.json()).trip;
+      return t.travel?.history.length;
+    })
+    .toBe(4);
+  await expect(page.getByText('Modifiche da rivedere', { exact: true })).not.toBeVisible();
+  await expect
+    .poll(async () =>
+      page.evaluate(async () => {
+        const r = indexedDB.open('passo-private-data');
+        return await new Promise<number>((resolve) => {
+          r.onsuccess = () => {
+            const d = r.result;
+            const c = d.transaction('travelCommands').objectStore('travelCommands').count();
+            c.onsuccess = () => resolve(c.result);
+          };
+        });
+      }),
+    )
+    .toBe(0);
+});
+test('two phones retain conflicting edits until explicit review and confirmation', async ({
+  page,
+  browser,
+  browserName,
+  context,
+  request,
+}) => {
+  await login(page);
+  await download(page);
+  const other = await browser.newContext({ baseURL: 'http://localhost:5173' }),
+    second = await other.newPage();
+  try {
+    await login(second);
+    await connection(true, browserName, context, request);
+    if (browserName === 'webkit')
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false });
+        window.dispatchEvent(new Event('offline'));
+      });
+    await page.getByRole('button', { name: 'Adatta La piazza del borgo', exact: true }).click();
+    await page.getByRole('button', { name: '+30 min', exact: true }).click();
+    await confirmEdit(page);
+    if (browserName === 'webkit') await connection(false, browserName, context, request);
+    await second.getByRole('button', { name: 'Adatta La piazza del borgo', exact: true }).click();
+    await confirmEdit(second);
+    await expect
+      .poll(async () => {
+        const r = await second.request.get('/api/v2/trips/example-trip');
+        return (await r.json()).trip.travel?.history.length;
+      })
+      .toBe(1);
+    if (browserName === 'webkit')
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => true });
+        window.dispatchEvent(new Event('online'));
+      });
+    else await connection(false, browserName, context, request);
+    await page.getByRole('button', { name: 'Aggiorna viaggio' }).click();
+    await expect(page.getByText('Modifiche da rivedere', { exact: true })).toBeVisible();
+    await expect(page.locator('.time-column strong').first()).toHaveText('09:30');
+    await page.getByRole('button', { name: 'Confronta le versioni' }).click();
+    await page.getByRole('button', { name: 'Rivedi e conferma' }).click();
+    await page.getByRole('dialog').getByLabel('Ritardo in minuti').fill('15');
+    await confirmEdit(page);
+    await expect
+      .poll(async () => {
+        const r = await page.request.get('/api/v2/trips/example-trip');
+        return (await r.json()).trip.travel?.history.length;
+      })
+      .toBe(2);
+    await second.getByRole('button', { name: 'Aggiorna viaggio' }).click();
+    await expect(second.locator('.time-column strong').first()).toHaveText('09:30');
+    await expect(page.getByText('Modifiche da rivedere', { exact: true })).not.toBeVisible();
+  } finally {
+    await other.close();
+  }
 });

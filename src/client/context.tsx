@@ -12,13 +12,20 @@ import {
   ArrowLeft,
   CircleHelp,
 } from 'lucide-react';
-import { db } from './db';
+import { queueTravel } from './api';
+import { applyTravel, type TravelCommand } from '../domain/travel';
+import { TravelEditor, type EditTarget } from '../components/TravelEditor';
+import { TravelSync } from '../components/TravelSync';
+import { db, overlay } from './db';
 import { loadTrip, queueChange, syncPending, request, type TripResult } from './api';
 import type { Progress, Trip } from '../domain/schema';
 import { currentStep } from '../domain/trip';
 import { OfflineDialog } from '../components/OfflineDialog';
 
 type TripContextValue = TripResult & {
+  editing: boolean;
+  edit: (target: EditTarget) => void;
+  saveTravel: (command: TravelCommand, base: Trip, revise: boolean) => Promise<void>;
   refresh: () => Promise<void>;
   changeProgress: (id: string, status: Progress) => Promise<void>;
   changeTask: (id: string, done: boolean) => Promise<void>;
@@ -80,6 +87,25 @@ export function TripShell() {
     staleTime: 60000,
     retry: false,
   });
+  const [editor, setEditor] = useState<EditTarget | null>(null),
+    [config, setConfig] = useState({ editing: true, staging: false });
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const saved = await db.meta.get('config');
+      if (saved && alive) setConfig(saved.value as typeof config);
+      try {
+        const next = await request<typeof config>('/config');
+        await db.meta.put({ id: 'config', value: next });
+        if (alive) setConfig(next);
+      } catch {
+        /* Cached settings remain usable offline. */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
   const [notice, setNotice] = useState(''),
     [showOffline, setShowOffline] = useState(false),
     [savedAt, setSavedAt] = useState<number | null>(null);
@@ -96,8 +122,18 @@ export function TripShell() {
       void client.invalidateQueries({ queryKey: ['trip', tripId] });
     };
     window.addEventListener('passo:synced', update);
+    const timer = online
+      ? setInterval(() => {
+          void db.travelCommands.count().then((count) => {
+            if (count) void syncPending();
+          });
+        }, 15000)
+      : undefined;
     if (online) void syncPending();
-    return () => window.removeEventListener('passo:synced', update);
+    return () => {
+      window.removeEventListener('passo:synced', update);
+      if (timer) clearInterval(timer);
+    };
   }, [online, tripId, client]);
   useEffect(() => {
     void db.trips.get(tripId).then((v) => setSavedAt(v?.downloaded ? v.savedAt : null));
@@ -193,6 +229,29 @@ export function TripShell() {
     offline,
     online: online && !offline,
     refresh,
+    editing: config.editing,
+    edit: setEditor,
+    saveTravel: async (command, base, revise) => {
+      if (!config.editing) throw new Error('Le modifiche sono disattivate.');
+      if (revise) {
+        const preview = applyTravel(base, command);
+        await db.travelCommands.update(command.id, {
+          command,
+          preview,
+          conflict: false,
+          error: undefined,
+        });
+        const cache = await db.trips.get(trip.id);
+        if (cache) await db.trips.put({ ...cache, trip: base });
+      } else await queueTravel(base, command);
+      const cache = await db.trips.get(trip.id);
+      client.setQueryData<TripResult>(['trip', trip.id], {
+        trip: await overlay(cache?.trip ?? base),
+        etag: cache?.etag ?? etag,
+        offline,
+      });
+      if (online) void syncPending();
+    },
     notify,
     changeProgress: (id, status) =>
       change({
@@ -244,6 +303,8 @@ export function TripShell() {
           {savedAt && `· ${new Date(savedAt).toLocaleString('it-IT')}`}
         </div>
       ) : null}
+      {config.staging && <div className="staging-bar">STAGING · Ambiente di prova</div>}
+      <TravelSync />
       <Outlet />
       <nav className="bottom-nav" aria-label="Navigazione viaggio">
         <NavLink to={base} end>
@@ -271,6 +332,7 @@ export function TripShell() {
           </button>
         </div>
       )}
+      {editor && <TravelEditor target={editor} onClose={() => setEditor(null)} />}
       {showOffline && <OfflineDialog onClose={() => setShowOffline(false)} />}
     </TripContext.Provider>
   );

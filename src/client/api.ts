@@ -1,6 +1,7 @@
+import { applyTravel, preconditions, type TravelCommand } from '../domain/travel';
 import { upload } from '@vercel/blob/client';
 import { TripSchema, type Trip, type Ticket } from '../domain/schema';
-import { db, clearPrivateData, overlay, type Pending } from './db';
+import { db, clearPrivateData, overlay, journal, type Pending } from './db';
 
 export class RequestError extends Error {
   constructor(
@@ -26,7 +27,7 @@ export async function request<T>(
   body?: unknown,
   etag?: string,
 ): Promise<T> {
-  const response = await fetch('/api/v1' + path, {
+  const response = await fetch('/api/v2' + path, {
     method,
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', ...(etag ? { 'X-Trip-Version': etag } : {}) },
@@ -46,11 +47,14 @@ export async function request<T>(
       412: 'Il viaggio è stato aggiornato. Ricarica e riprova.',
       413: 'Il file è troppo grande.',
       422: 'Controlla i dati inseriti e i collegamenti alla tappa.',
+      426: 'Aggiorna l’app per usare il programma adattato.',
       428: 'Aggiorna il viaggio prima di salvare.',
     };
     throw new RequestError(
       response.status,
-      localized[response.status] ?? data.error ?? 'Impossibile completare la richiesta',
+      (path.includes('/travel/') ? data.error : localized[response.status]) ??
+        data.error ??
+        'Impossibile completare la richiesta',
     );
   }
   return response.json();
@@ -81,7 +85,7 @@ export async function loadTrip(id: string): Promise<TripResult> {
   } catch (error) {
     if (error instanceof RequestError && [401, 403, 404].includes(error.status)) throw error;
     const saved = await db.trips.get(id);
-    if (!saved?.downloaded) throw error;
+    if (!saved || (!saved.downloaded && !(await journal(id)).length)) throw error;
     return { trip: await overlay(saved.trip), etag: saved.etag, offline: true };
   }
 }
@@ -90,60 +94,130 @@ export async function loadTrips(): Promise<TripSummary[]> {
     return await request<TripSummary[]>('/trips');
   } catch (error) {
     if (error instanceof RequestError && [401, 403].includes(error.status)) throw error;
-    return (await db.trips.filter((t) => t.downloaded).toArray()).map(({ id, trip }) => ({
-      id,
-      title: trip.plan.title,
-      subtitle: trip.plan.subtitle,
-      destinations: trip.plan.destinations,
-      startDate: trip.plan.startDate,
-      endDate: trip.plan.endDate,
-      travellers: trip.plan.travellers.length,
-    }));
+    const localIds = new Set((await journal()).map((e) => e.value.tripId));
+    return (await db.trips.filter((t) => t.downloaded || localIds.has(t.id)).toArray()).map(
+      ({ id, trip }) => ({
+        id,
+        title: trip.plan.title,
+        subtitle: trip.plan.subtitle,
+        destinations: trip.plan.destinations,
+        startDate: trip.plan.startDate,
+        endDate: trip.plan.endDate,
+        travellers: trip.plan.travellers.length,
+      }),
+    );
   }
 }
 export async function queueChange(item: Omit<Pending, 'id' | 'conflict'>) {
-  const id = `${item.tripId}:${item.kind}:${item.itemId}`,
-    previous = await db.pending.get(id);
-  const expected = previous?.expected ?? item.expected;
-  if (item.value === expected) await db.pending.delete(id);
-  else await db.pending.put({ ...item, id, expected, conflict: false });
+  if (item.value === item.expected) return;
+  await db.pending.put({
+    ...item,
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+    conflict: false,
+  });
+}
+export async function queueTravel(trip: Trip, command: TravelCommand) {
+  const preview = applyTravel(trip, command);
+  await db.travelCommands.put({
+    id: command.id,
+    tripId: trip.id,
+    command,
+    preview,
+    createdAt: Date.now(),
+    conflict: false,
+  });
+  return preview;
 }
 let syncing: Promise<void> | undefined;
 export function syncPending(): Promise<void> {
   if (syncing) return syncing;
   syncing = (async () => {
-    for (const item of await db.pending.toArray()) {
-      if (item.conflict) continue;
+    const blocked = new Set<string>();
+    for (const entry of await journal()) {
+      const item = entry.value;
+      if (blocked.has(item.tripId)) continue;
+      if (item.conflict) {
+        blocked.add(item.tripId);
+        continue;
+      }
       try {
-        // Re-read server data without overlay before each mutation.
-        const result = await request<TripResult>(`/trips/${item.tripId}`);
-        const exists =
-          item.kind === 'progress'
-            ? result.trip.plan.steps.some((s) => s.id === item.itemId)
-            : result.trip.plan.tasks.some((t) => t.id === item.itemId);
-        const actual =
-          item.kind === 'progress'
-            ? (result.trip.state.progress[item.itemId] ?? 'pending')
-            : (result.trip.state.taskCompletion[item.itemId] ?? false);
-        if (!exists || (actual !== item.expected && actual !== item.value)) {
-          await db.pending.update(item.id, { conflict: true });
+        let result = await request<TripResult>(`/trips/${item.tripId}`);
+        if (entry.type === 'travel') {
+          const local = entry.value;
+          if (!result.trip.travel?.appliedIds.includes(local.id)) {
+            applyTravel(result.trip, local.command);
+            result = await request<TripResult>(
+              `/trips/${item.tripId}/travel/apply`,
+              'POST',
+              local.command,
+              result.etag,
+            );
+          }
+          await db.transaction('rw', db.trips, db.travelCommands, async () => {
+            const cache = await db.trips.get(item.tripId);
+            if (cache)
+              await db.trips.put({
+                ...cache,
+                trip: result.trip,
+                etag: result.etag,
+                savedAt: Date.now(),
+              });
+            await db.travelCommands.delete(item.id);
+          });
+        } else {
+          const state = entry.value;
+          const exists =
+            state.kind === 'progress'
+              ? result.trip.plan.steps.some((s) => s.id === state.itemId)
+              : result.trip.plan.tasks.some((t) => t.id === state.itemId);
+          const actual =
+            state.kind === 'progress'
+              ? (result.trip.state.progress[state.itemId] ?? 'pending')
+              : (result.trip.state.taskCompletion[state.itemId] ?? false);
+          if (!exists || (actual !== state.expected && actual !== state.value))
+            throw new RequestError(409, 'Il dato è cambiato su un altro dispositivo.');
+          if (actual !== state.value)
+            result = await request<TripResult>(
+              `/trips/${state.tripId}/${state.kind === 'progress' ? 'progress' : 'tasks'}/${state.itemId}`,
+              'PATCH',
+              state.kind === 'progress'
+                ? {
+                    status: state.value,
+                    expected: actual,
+                    at: new Date(state.createdAt ?? Date.now()).toISOString(),
+                  }
+                : { done: state.value, expected: actual },
+              result.etag,
+            );
+          await db.transaction('rw', db.trips, db.pending, async () => {
+            const cache = await db.trips.get(item.tripId);
+            if (cache)
+              await db.trips.put({
+                ...cache,
+                trip: result.trip,
+                etag: result.etag,
+                savedAt: Date.now(),
+              });
+            await db.pending.delete(item.id);
+          });
+        }
+      } catch (error) {
+        if (error instanceof RequestError && error.status === 412) {
+          blocked.add(item.tripId);
           continue;
         }
-        if (actual !== item.value)
-          await request(
-            `/trips/${item.tripId}/${item.kind === 'progress' ? 'progress' : 'tasks'}/${item.itemId}`,
-            'PATCH',
-            item.kind === 'progress'
-              ? { status: item.value, expected: actual }
-              : { done: item.value, expected: actual },
-            result.etag,
-          );
-        await db.pending.delete(item.id);
-        await fetchTrip(item.tripId);
-      } catch (e) {
-        if (e instanceof RequestError && [409, 412].includes(e.status)) continue;
-        if (e instanceof RequestError && e.status === 404) {
-          await db.pending.update(item.id, { conflict: true });
+        if (
+          (error instanceof Error && error.name === 'TravelError') ||
+          (error instanceof RequestError && [404, 409, 422, 403, 426].includes(error.status))
+        ) {
+          if (entry.type === 'travel')
+            await db.travelCommands.update(item.id, {
+              conflict: true,
+              error: error instanceof Error ? error.message : 'Rivedi la modifica.',
+            });
+          else await db.pending.update(item.id, { conflict: true });
+          blocked.add(item.tripId);
           continue;
         }
         break;
@@ -154,6 +228,30 @@ export function syncPending(): Promise<void> {
     syncing = undefined;
   });
   return syncing;
+}
+export async function discardTravel(id: string) {
+  const item = await db.travelCommands.get(id);
+  if (!item) return;
+  // Later commands depend on the local result. Preserve them for explicit review.
+  await db.travelCommands.delete(id);
+  for (const next of await journal(item.tripId)) {
+    if ((next.value.createdAt ?? 0) < item.createdAt) continue;
+    if (next.type === 'travel')
+      await db.travelCommands.update(next.value.id, {
+        conflict: true,
+        error: 'Una modifica precedente è stata scartata. Rivedi questa anteprima.',
+      });
+    else await db.pending.update(next.value.id, { conflict: true });
+  }
+  window.dispatchEvent(new Event('passo:synced'));
+}
+export async function reviseTravel(id: string, shared: Trip) {
+  const item = await db.travelCommands.get(id);
+  if (!item) return;
+  const command = { ...item.command, expected: preconditions(shared, item.command.action) };
+  const preview = applyTravel(shared, command);
+  await db.travelCommands.update(id, { command, preview, conflict: false, error: undefined });
+  await syncPending();
 }
 export async function resolvePending(id: string, keepLocal: boolean) {
   const item = await db.pending.get(id);

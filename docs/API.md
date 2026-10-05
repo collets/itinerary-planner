@@ -47,3 +47,20 @@ Production tickets upload directly to Blob so the 4.5 MB Vercel Function request
 4. POST `/finalize`; signed callbacks may already have finalized the upload. The operation is idempotent.
 
 Authorization restricts the generated path, MIME, maximum size and a 10-minute validity window. Finalization verifies exact file size and PDF/PNG/JPEG magic bytes. It does not perform malware scanning or guarantee that an uploaded document is a valid entry ticket. Originals have no public URLs. Use the CLI for an end-to-end example.
+
+## Version 2 travel commands
+
+The current browser and CLI use `/api/v2`; the existing endpoints retain their contracts. Version 1 requests to an upgraded trip return **426**, except authenticated binary ticket transfers, which remain compatible. V1 trip documents can be read through V2 and upgrade only on the first travel write. A caller cannot bypass version checks with a request header.
+
+Authenticated browser sessions and agent tokens can access:
+
+| Method | Path (under `/api/v2`)        | Result                               |
+| ------ | ----------------------------- | ------------------------------------ |
+| POST   | `/trips/{id}/travel/preview`  | Validated draft; no persistence      |
+| POST   | `/trips/{id}/travel/apply`    | Committed trip and new `etag`        |
+| GET    | `/trips/{id}/travel/original` | `{plan}` authored baseline           |
+| GET    | `/trips/{id}/travel/history`  | Last 20 changes: `id`, `title`, `at` |
+
+The command body is `{id, action, routes, expected, at}`. `id` is a unique stable UUID for retries; `at` is an ISO instant. See [DATA.md](DATA.md) for action shapes. Use `preconditions(trip, action)` from `src/domain/travel.ts` to construct `expected`, whose canonical fingerprints cover the involved day(s), active/archived steps, progress, manual locks, booked slots and baseline membership, or just the involved shared note. Independently changed notes/days can merge; a same-day change returns **409**. All applies require the current `X-Trip-Version` and storage CAS (**412** on a competing commit). A retry of an acknowledged command returns the current document without applying it again, even when its old version is stale. Validation/anchor conflicts return **422**. Browser writes require a same-origin `Origin` and the private session; raw plan editing remains agent-only.
+
+`GET /api/v2/config` includes `editing` and `staging`. Setting server `TRAVEL_EDITING_ENABLED=false` rejects travel writes/previews while retaining V2 reads, tickets and existing operational controls. No database migration or data reset is required.
