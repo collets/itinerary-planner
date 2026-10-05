@@ -1621,6 +1621,9 @@ progress::-webkit-progress-value {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.modal-header h2:focus {
+  outline: none;
+}
 .modal-header .icon-button {
   flex: 0 0 44px;
 }
@@ -2333,11 +2336,17 @@ legend {
   bottom: 8px;
   min-height: 32px;
   padding: 4px 12px;
-  border: 1px solid var(--line, #ded8ce);
+  border: 1px solid #b8c8b1;
   border-radius: 20px;
-  color: var(--muted, #6d6c60);
+  color: var(--moss);
   font-size: 12px;
-  background: transparent;
+  background: #e5eadd;
+  font-weight: 600;
+}
+.button.adapt-button {
+  background: #e5eadd;
+  border-color: #b8c8b1;
+  color: var(--moss);
 }
 .fixed-label {
   position: absolute;

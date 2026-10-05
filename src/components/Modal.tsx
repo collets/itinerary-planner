@@ -59,11 +59,13 @@ export function Modal({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null),
+    titleRef = useRef<HTMLHeadingElement>(null),
     id = useId();
   useEffect(() => {
     const dialog = ref.current!;
     const unlockPage = lockPageScroll();
     if (!dialog.open) dialog.showModal();
+    titleRef.current?.focus({ preventScroll: true });
     return () => {
       if (dialog.open) dialog.close();
       unlockPage();
@@ -83,7 +85,9 @@ export function Modal({
       }}
     >
       <div className="modal-header">
-        <h2 id={id}>{title}</h2>
+        <h2 id={id} ref={titleRef} tabIndex={-1}>
+          {title}
+        </h2>
         <button type="button" className="icon-button" onClick={onClose} aria-label="Chiudi">
           <X size={20} />
         </button>

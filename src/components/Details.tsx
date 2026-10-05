@@ -191,7 +191,7 @@ export function Details() {
         </div>
         {editing && (
           <button
-            className="button subtle full"
+            className="button subtle full adapt-button"
             onClick={() =>
               edit({
                 dayId: day.id,

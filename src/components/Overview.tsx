@@ -169,7 +169,10 @@ export function Overview() {
           </div>
           {editing && (
             <div className="day-edit-row">
-              <button className="button subtle" onClick={() => edit({ dayId: day.id })}>
+              <button
+                className="button subtle adapt-button"
+                onClick={() => edit({ dayId: day.id })}
+              >
                 Adatta la giornata
               </button>
             </div>

@@ -156,6 +156,13 @@ test('dialogs fill the mobile screen, contain scrolling and restore the page', a
   await editDay.click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
+  const close = dialog.getByRole('button', { name: 'Chiudi', exact: true });
+  await expect(dialog.getByRole('heading')).toBeFocused();
+  expect(await close.evaluate((element) => element.matches(':focus-visible'))).toBe(false);
+  await page.keyboard.press('Tab');
+  await expect(close).toBeFocused();
+  expect(await close.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+  await expect(close).toHaveCSS('outline-style', 'solid');
   const viewport = page.viewportSize()!;
   const bounds = await dialog.boundingBox();
   expect(bounds).toEqual({ x: 0, y: 0, width: viewport.width, height: viewport.height });
@@ -195,6 +202,8 @@ test('dialogs fill the mobile screen, contain scrolling and restore the page', a
   await page.getByRole('link', { name: 'Biglietti', exact: true }).click();
   await page.getByRole('button', { name: 'Aggiungi biglietto' }).click();
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading')).toBeFocused();
+  expect(await close.evaluate((element) => element.matches(':focus-visible'))).toBe(false);
   expect(await dialog.boundingBox()).toEqual({
     x: 0,
     y: 0,
