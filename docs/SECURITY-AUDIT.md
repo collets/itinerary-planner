@@ -107,8 +107,9 @@ Blob upload completion is a public route by necessity. Missing signatures are
 rejected before SDK processing; invalid signatures cannot invoke finalization.
 Legacy deployments use SDK HMAC verification; OIDC deployments use the configured
 webhook public key. The browser receives a short-lived upload delegation, never
-the store read/write credential. OIDC authorization tests mock provider issuance;
-an actual staging upload still needs validation through normal preview access.
+the store read/write credential. OIDC authorization tests mock provider issuance.
+After the CSP correction, the owner confirmed a real staging PDF upload and
+successful viewing through normal preview access on October 5.
 
 All trip/ticket reads and agent documentation endpoints require authentication.
 Private API responses use `private, no-store`, no wildcard CORS, nosniff, frame
@@ -310,8 +311,12 @@ budget. Routing-account setup can also wait until the mocked flow is ready.
 
 The OIDC issuance test uses provider mocks. The browser suite uses FileStorage,
 including synthetic Blob exchanges through the installed browser SDK. This
-does not replace a real private-Blob upload check in staging. Edge firewall and
-future AI budget controls remain explicit launch gates, not completed protections.
+does not replace provider integration checks. The owner confirmed the real
+private-Blob PDF upload and viewing after the staging fix. The two synthetic
+provider tests block service workers to ensure WebKit routes the mocked API
+exchange consistently; the separate offline tests retain service workers.
+Edge firewall verification and future AI budget controls remain explicit launch
+gates, not completed protections.
 
 ## References
 

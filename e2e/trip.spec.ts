@@ -118,83 +118,90 @@ async function presignedProvider(page: Page) {
   });
 }
 
-test('uploads a PDF through the presigned Blob SDK endpoint under the deployed CSP', async ({
-  page,
-}) => {
-  await presignedProvider(page);
-  let transfers = 0;
-  const bytes = pdfDocument();
-  await page.route('https://vercel.com/api/blob/**', async (route) => {
-    const url = new URL(route.request().url());
-    const pathname = url.searchParams.get('pathname')!;
-    expect(route.request().method()).toBe('PUT');
-    expect(route.request().headers()['authorization']).toBeUndefined();
-    expect(url.searchParams.get('vercel-blob-signature')).toBe('test-signature');
-    // Playwright does not expose File/stream upload bytes in intercepted
-    // requests. Persist the selected fixture as the synthetic provider would.
-    expect(route.request().headers()['x-content-length']).toBe(String(bytes.length));
-    const [, tripId, ticketId] = pathname.split('/');
-    const stored = await page.request.put(`/api/v1/trips/${tripId}/tickets/${ticketId}/file`, {
-      headers: { 'Content-Type': 'application/pdf', Origin: 'http://localhost:5173' },
-      data: bytes,
-    });
-    await expect(stored).toBeOK();
-    transfers++;
-    await route.fulfill({
-      json: {
-        pathname,
-        url: `https://e2e.private.blob.vercel-storage.com/${pathname}`,
-        downloadUrl: `https://e2e.private.blob.vercel-storage.com/${pathname}?download=1`,
-        contentType: 'application/pdf',
-        contentDisposition: 'attachment',
-        etag: 'test-etag',
-      },
-    });
-  });
-  await login(page);
-  await page.getByRole('link', { name: 'Biglietti', exact: true }).click();
-  await page.getByRole('button', { name: 'Aggiungi biglietto' }).click();
-  const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('Titolo', { exact: true }).fill('PDF via Blob');
-  await dialog.locator('input[type=file]').setInputFiles({
-    name: 'test.pdf',
-    mimeType: 'application/pdf',
-    buffer: bytes,
-  });
-  await dialog.getByRole('button', { name: 'Salva', exact: true }).click();
-  await expect(dialog).not.toBeVisible();
-  expect(transfers).toBe(1);
-  await expect(page.getByText('Upload incompleto · Verifica')).not.toBeVisible();
-  await page.getByRole('link', { name: /Apri biglietto/ }).click();
-  await expect(page.locator('.pdf-container canvas')).toBeVisible();
-});
+test.describe('Blob provider exchange', () => {
+  // WebKit on the CI runner can send API requests through its service worker
+  // outside Playwright's routes. These synthetic provider tests need routing;
+  // the separate offline tests retain service workers and cover real caching.
+  test.use({ serviceWorkers: 'block' });
 
-test('a stalled Blob upload times out and releases the ticket form', async ({ page }) => {
-  await presignedProvider(page);
-  let attempts = 0;
-  await page.route('https://vercel.com/api/blob/**', async (route) => {
-    attempts++;
-    await route.abort('failed');
+  test('uploads a PDF through the presigned Blob SDK endpoint under the deployed CSP', async ({
+    page,
+  }) => {
+    await presignedProvider(page);
+    let transfers = 0;
+    const bytes = pdfDocument();
+    await page.route('https://vercel.com/api/blob/**', async (route) => {
+      const url = new URL(route.request().url());
+      const pathname = url.searchParams.get('pathname')!;
+      expect(route.request().method()).toBe('PUT');
+      expect(route.request().headers()['authorization']).toBeUndefined();
+      expect(url.searchParams.get('vercel-blob-signature')).toBe('test-signature');
+      // Playwright does not expose File/stream upload bytes in intercepted
+      // requests. Persist the selected fixture as the synthetic provider would.
+      expect(route.request().headers()['x-content-length']).toBe(String(bytes.length));
+      const [, tripId, ticketId] = pathname.split('/');
+      const stored = await page.request.put(`/api/v1/trips/${tripId}/tickets/${ticketId}/file`, {
+        headers: { 'Content-Type': 'application/pdf', Origin: 'http://localhost:5173' },
+        data: bytes,
+      });
+      await expect(stored).toBeOK();
+      transfers++;
+      await route.fulfill({
+        json: {
+          pathname,
+          url: `https://e2e.private.blob.vercel-storage.com/${pathname}`,
+          downloadUrl: `https://e2e.private.blob.vercel-storage.com/${pathname}?download=1`,
+          contentType: 'application/pdf',
+          contentDisposition: 'attachment',
+          etag: 'test-etag',
+        },
+      });
+    });
+    await login(page);
+    await page.getByRole('link', { name: 'Biglietti', exact: true }).click();
+    await page.getByRole('button', { name: 'Aggiungi biglietto' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Titolo', { exact: true }).fill('PDF via Blob');
+    await dialog.locator('input[type=file]').setInputFiles({
+      name: 'test.pdf',
+      mimeType: 'application/pdf',
+      buffer: bytes,
+    });
+    await dialog.getByRole('button', { name: 'Salva', exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    expect(transfers).toBe(1);
+    await expect(page.getByText('Upload incompleto · Verifica')).not.toBeVisible();
+    await page.getByRole('link', { name: /Apri biglietto/ }).click();
+    await expect(page.locator('.pdf-container canvas')).toBeVisible();
   });
-  await login(page);
-  await page.getByRole('link', { name: 'Biglietti', exact: true }).click();
-  await page.getByRole('button', { name: 'Aggiungi biglietto' }).click();
-  const dialog = page.getByRole('dialog');
-  await dialog.getByLabel('Titolo', { exact: true }).fill('Upload da riprovare');
-  await dialog.locator('input[type=file]').setInputFiles({
-    name: 'test.pdf',
-    mimeType: 'application/pdf',
-    buffer: pdfDocument(),
+
+  test('a stalled Blob upload times out and releases the ticket form', async ({ page }) => {
+    await presignedProvider(page);
+    let attempts = 0;
+    await page.route('https://vercel.com/api/blob/**', async (route) => {
+      attempts++;
+      await route.abort('failed');
+    });
+    await login(page);
+    await page.getByRole('link', { name: 'Biglietti', exact: true }).click();
+    await page.getByRole('button', { name: 'Aggiungi biglietto' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Titolo', { exact: true }).fill('Upload da riprovare');
+    await dialog.locator('input[type=file]').setInputFiles({
+      name: 'test.pdf',
+      mimeType: 'application/pdf',
+      buffer: pdfDocument(),
+    });
+    await page.clock.install();
+    await dialog.getByRole('button', { name: 'Salva', exact: true }).click();
+    await expect.poll(() => attempts).toBeGreaterThan(0);
+    await expect(dialog.getByRole('button', { name: 'Salvataggio…' })).toBeDisabled();
+    await page.clock.fastForward(180001);
+    await expect(dialog.getByText(/Caricamento interrotto dopo 3 minuti/)).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Salva', exact: true })).toBeEnabled();
+    await dialog.getByRole('button', { name: 'Chiudi', exact: true }).click();
+    await expect(dialog).not.toBeVisible();
   });
-  await page.clock.install();
-  await dialog.getByRole('button', { name: 'Salva', exact: true }).click();
-  await expect.poll(() => attempts).toBeGreaterThan(0);
-  await expect(dialog.getByRole('button', { name: 'Salvataggio…' })).toBeDisabled();
-  await page.clock.fastForward(180001);
-  await expect(dialog.getByText(/Caricamento interrotto dopo 3 minuti/)).toBeVisible();
-  await expect(dialog.getByRole('button', { name: 'Salva', exact: true })).toBeEnabled();
-  await dialog.getByRole('button', { name: 'Chiudi', exact: true }).click();
-  await expect(dialog).not.toBeVisible();
 });
 test('full day, route and details remain usable on mobile', async ({ page }) => {
   const errors: string[] = [];
