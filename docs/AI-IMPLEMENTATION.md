@@ -16,15 +16,18 @@ and the [security requirements](SECURITY-AUDIT.md#mandatory-design-before-paid-a
   Do not copy personal source files, tickets, `.env` files or access keys.
 - Keep commits small by milestone. Bring subsequent security fixes from staging
   into this branch before release; do not merge unfinished AI changes into staging.
-- After staging passes CI, release its existing hardening independently of AI.
-  CI is currently delayed by GitHub's runner-assignment incident.
+- The staging hardening passed CI and was released to production independently
+  of AI on October 5. Production is at the base commit above. Private backups and
+  schema compatibility checks preceded release; production API/login/data and
+  ticket checks passed afterward. AI development proceeds from that baseline.
 - Do not push the feature branch until its preview configuration has been reviewed.
   A Vercel preview is a deployment of this same project, not a separate security
   boundary. It can inherit staging Blob access and environment variables.
 - For an online AI preview, use branch-specific settings, a separate private test
   Blob store, separate credentials and fictional seed data. Keep paid mode disabled.
   Prevent the existing staging seed script from seeding that store unintentionally.
-- Merge reviewed milestones to staging, verify them there, then merge to main.
+- Merge reviewed milestones to staging, verify them there, then merge to main
+  through a pull request. Follow the protected branch policy for promotions.
   Publishing a branch does not by itself configure safe environment isolation.
 
 ## First release
