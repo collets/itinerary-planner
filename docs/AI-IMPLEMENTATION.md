@@ -20,7 +20,9 @@ and the [security requirements](SECURITY-AUDIT.md#mandatory-design-before-paid-a
   of AI on October 5. Production is at the base commit above. Private backups and
   schema compatibility checks preceded release; production API/login/data and
   ticket checks passed afterward. AI development proceeds from that baseline.
-- Do not push the feature branch until its preview configuration has been reviewed.
+- The feature branch skips Vercel builds until isolated preview configuration is
+  explicitly enabled. It can be pushed for backup and ordinary GitHub CI while
+  keeping its online AI preview disabled. Review that guard before pushing.
   A Vercel preview is a deployment of this same project, not a separate security
   boundary. It can inherit staging Blob access and environment variables.
 - For an online AI preview, use branch-specific settings, a separate private test
