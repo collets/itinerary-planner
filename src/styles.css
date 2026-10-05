@@ -1915,7 +1915,8 @@ legend {
   gap: 22px;
 }
 .trip-cover {
-  display: block;
+  display: flex;
+  flex-direction: column;
   position: relative;
   background: #e8ecdf;
   border: 1px solid #d6dfcb;
@@ -2013,6 +2014,7 @@ legend {
   font-size: 12px;
   color: var(--muted);
   min-height: 40px;
+  margin-bottom: auto;
 }
 .trip-cover-meta {
   display: flex;
