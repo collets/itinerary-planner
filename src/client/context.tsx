@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useParams, Outlet, useNavigate, NavLink, Link } from 'react-router-dom';
+import { useParams, Outlet, useNavigate, useLocation, Link } from 'react-router-dom';
 import {
   Footprints,
   Route,
@@ -79,6 +79,7 @@ export function ErrorPanel({ message, retry }: { message: string; retry?: () => 
 export function TripShell() {
   const { tripId = '' } = useParams();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const client = useQueryClient();
   const online = useOnline();
   const query = useQuery({
@@ -175,6 +176,13 @@ export function TripShell() {
     );
   const { trip, etag, offline } = query.data;
   const base = `/trips/${trip.id}`;
+  const path = pathname.replace(/\/+$/, '');
+  const inSection = (section: string) =>
+    path === `${base}/${section}` || path.startsWith(`${base}/${section}/`);
+  const navigationState = (active: boolean) => ({
+    className: active ? 'active' : undefined,
+    'aria-current': active ? ('page' as const) : undefined,
+  });
   const refresh = async () => {
     if (navigator.onLine) await syncPending();
     await query.refetch();
@@ -307,22 +315,25 @@ export function TripShell() {
       <TravelSync />
       <Outlet />
       <nav className="bottom-nav" aria-label="Navigazione viaggio">
-        <NavLink to={base} end>
+        <Link to={base} {...navigationState(path === base)}>
           <Route size={21} />
           <span>Itinerario</span>
-        </NavLink>
-        <button onClick={() => next && navigate(`${base}/steps/${next.id}`)}>
+        </Link>
+        <button
+          {...navigationState(inSection('steps'))}
+          onClick={() => next && navigate(`${base}/steps/${next.id}`)}
+        >
           <Footprints size={21} />
           <span>Adesso</span>
         </button>
-        <NavLink to={`${base}/tickets`}>
+        <Link to={`${base}/tickets`} {...navigationState(inSection('tickets'))}>
           <Tickets size={21} />
           <span>Biglietti</span>
-        </NavLink>
-        <NavLink to={`${base}/preparation`}>
+        </Link>
+        <Link to={`${base}/preparation`} {...navigationState(inSection('preparation'))}>
           <ListChecks size={21} />
           <span>Preparativi</span>
-        </NavLink>
+        </Link>
       </nav>
       {notice && (
         <div className="toast" role="status">

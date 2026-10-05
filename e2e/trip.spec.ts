@@ -45,25 +45,45 @@ const login = async (page: Page) => {
   await page.getByRole('link', { name: /Un giorno a Borgo Blu/ }).click();
   await expect(page.getByRole('heading', { name: 'Un giorno a Borgo Blu.' })).toBeVisible();
 };
+const activeSection = async (page: Page, name: string) => {
+  const navigation = page.getByRole('navigation', { name: 'Navigazione viaggio' });
+  await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
+  await expect(navigation.locator('.active')).toHaveCount(1);
+  await expect(
+    navigation.getByRole(name === 'Adesso' ? 'button' : 'link', { name, exact: true }),
+  ).toHaveAttribute('aria-current', 'page');
+};
 test('full day, route and details remain usable on mobile', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await login(page);
+  await activeSection(page, 'Itinerario');
+  await page.goto('/trips/example-trip/?day=day-one');
+  await activeSection(page, 'Itinerario');
   await expect(page.getByText('09:00', { exact: true })).toBeVisible();
   await expect(
     page.getByRole('link', { name: 'Verso il museo, percorso 15 minuti' }),
   ).toContainText('1 punto di interesse');
   await page.getByRole('link', { name: 'Verso il museo, percorso 15 minuti' }).click();
   await expect(page.getByRole('heading', { name: 'Verso il museo', exact: true })).toBeVisible();
+  await activeSection(page, 'Adesso');
   await expect(
     page.locator('.street-list li').filter({ hasText: 'Via dei Giardini' }),
   ).toBeVisible();
   await expect(page.getByText('Giardino segreto', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Tappa successiva' }).click();
   await expect(page.getByRole('heading', { name: 'Museo del borgo', exact: true })).toBeVisible();
+  await activeSection(page, 'Adesso');
+  await page.reload();
+  await activeSection(page, 'Adesso');
   await expect(page.locator('.euro-estimate').first()).toContainText('≈');
   await page.getByRole('button', { name: /Visitata/ }).click();
   await page.getByRole('link', { name: 'Vista completa' }).click();
+  await activeSection(page, 'Itinerario');
+  await page.goBack();
+  await activeSection(page, 'Adesso');
+  await page.goForward();
+  await activeSection(page, 'Itinerario');
   await expect(page.locator('.stop-card').last()).toContainText('Visitata');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
@@ -80,6 +100,7 @@ test('uploads a shared ticket, filters by person, then opens it after an offline
 }) => {
   await login(page);
   await page.getByRole('link', { name: 'Biglietti', exact: true }).click();
+  await activeSection(page, 'Biglietti');
   await page.getByRole('button', { name: 'Aggiungi biglietto' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Titolo', { exact: true }).fill('Ingresso condiviso');
@@ -100,6 +121,7 @@ test('uploads a shared ticket, filters by person, then opens it after an offline
   await page.getByRole('dialog').getByRole('button', { name: 'Chiudi', exact: true }).click();
   await page.getByRole('link', { name: /Apri biglietto/ }).click();
   await expect(page.locator('.image-ticket img')).toBeVisible();
+  await activeSection(page, 'Biglietti');
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
   });
@@ -108,7 +130,9 @@ test('uploads a shared ticket, filters by person, then opens it after an offline
   await page.reload();
   await expect(page.locator('.image-ticket img')).toBeVisible();
   await expect(page.getByText(/Stai usando il viaggio salvato/)).toBeVisible();
+  await activeSection(page, 'Biglietti');
   await page.getByRole('link', { name: 'Preparativi', exact: true }).click();
+  await activeSection(page, 'Preparativi');
   await expect(page.locator('.budget-total .euro-estimate').first()).toContainText('≈');
   await page.getByRole('checkbox', { name: /Prenotare il museo/ }).check();
   await expect(page.getByRole('checkbox', { name: /Prenotare il museo/ })).toBeChecked();
@@ -121,6 +145,72 @@ test('uploads a shared ticket, filters by person, then opens it after an offline
       return (await response.json()).trip.state.taskCompletion['book-museum'];
     })
     .toBe(true);
+});
+test('dialogs fill the mobile screen, contain scrolling and restore the page', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 600 });
+  await login(page);
+  await page.evaluate(() => window.scrollTo(0, 250));
+  const editDay = page.getByRole('button', { name: 'Adatta la giornata', exact: true });
+  await editDay.scrollIntoViewIfNeeded();
+  const originalScroll = await page.evaluate(() => window.scrollY);
+  await editDay.click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  const viewport = page.viewportSize()!;
+  const bounds = await dialog.boundingBox();
+  expect(bounds).toEqual({ x: 0, y: 0, width: viewport.width, height: viewport.height });
+  await expect(dialog.getByRole('button', { name: 'Chiudi', exact: true })).toBeVisible();
+  expect(await dialog.locator('.modal-header svg').getAttribute('width')).toBe('20');
+  await page.getByLabel('Tipo di modifica').selectOption('add');
+  await expect(dialog.getByLabel('Nome della tappa')).toBeVisible();
+  await dialog.getByLabel('Nome della tappa').fill('Un posto nuovo');
+  await expect(dialog.getByLabel('Nome della tappa')).toHaveCSS('font-size', '16px');
+  const body = dialog.locator('.modal-body');
+  await body.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+  await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(dialog.getByRole('button', { name: 'Chiudi', exact: true })).toBeInViewport();
+  const scrollState = await dialog.evaluate((element) => {
+    const content = element.querySelector('.modal-body')!;
+    window.scrollTo(100, 1000);
+    return {
+      pageX: window.scrollX,
+      pageY: window.scrollY,
+      bodyPosition: getComputedStyle(document.body).position,
+      dialogFits: element.scrollWidth <= element.clientWidth,
+      contentFits: content.scrollWidth <= content.clientWidth,
+    };
+  });
+  expect(scrollState).toEqual({
+    pageX: 0,
+    pageY: 0,
+    bodyPosition: 'fixed',
+    dialogFits: true,
+    contentFits: true,
+  });
+  await page.screenshot({ path: 'test-results/mobile-dialog.png' });
+  await dialog.getByRole('button', { name: 'Chiudi', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(originalScroll);
+  expect(await page.evaluate(() => getComputedStyle(document.body).position)).not.toBe('fixed');
+  await page.getByRole('link', { name: 'Biglietti', exact: true }).click();
+  await page.getByRole('button', { name: 'Aggiungi biglietto' }).click();
+  await expect(dialog).toBeVisible();
+  expect(await dialog.boundingBox()).toEqual({
+    x: 0,
+    y: 0,
+    width: viewport.width,
+    height: viewport.height,
+  });
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect.poll(() => dialog.boundingBox()).toEqual({ x: 0, y: 0, width: 844, height: 390 });
+  await expect(dialog.getByRole('button', { name: 'Chiudi', exact: true })).toBeInViewport();
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect.poll(async () => (await dialog.boundingBox())!.width).toBe(550);
+  expect((await dialog.boundingBox())!.height).toBeLessThan(768);
+  await expect(dialog.getByRole('button', { name: 'Chiudi', exact: true })).toBeInViewport();
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  expect(await page.evaluate(() => getComputedStyle(document.body).position)).not.toBe('fixed');
 });
 function pdfDocument() {
   const content = 'BT /F1 24 Tf 40 160 Td (BIGLIETTO TEST) Tj ET';
