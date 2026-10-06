@@ -1,9 +1,16 @@
 // Vercel ignoreCommand: exit 0 skips a build; exit 1 proceeds.
 // Main/staging releases keep their ordinary build behavior.
 const aiBranch = process.env.VERCEL_GIT_COMMIT_REF === 'feature/ai-assistance';
-if (!aiBranch) process.exit(1);
+const aiProject =
+  !!process.env.AI_PREVIEW_PROJECT_ID || process.env.APP_ENVIRONMENT === 'ai-preview';
+if (!aiBranch && !aiProject) process.exit(1);
 const isolated =
   process.env.VERCEL_ENV === 'preview' &&
+  (aiBranch ||
+    (process.env.VERCEL_GIT_COMMIT_REF === 'staging' &&
+      process.env.AI_STAGING_BRANCH_ENABLED === 'true')) &&
+  !!process.env.AI_PREVIEW_PROJECT_ID &&
+  process.env.AI_PREVIEW_PROJECT_ID === process.env.VERCEL_PROJECT_ID &&
   process.env.AI_PREVIEW_ENABLED === 'true' &&
   process.env.APP_ENVIRONMENT === 'ai-preview' &&
   process.env.STORAGE_DRIVER === 'blob' &&

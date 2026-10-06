@@ -21,6 +21,7 @@ import {
   TravelActionSchema,
 } from '../src/domain/travel';
 import { openapi } from '../src/server/app';
+import { apiClient } from './api-client.js';
 
 config({ path: process.env.ITINERARY_ENV_FILE ?? '.env.local', quiet: true });
 const argv = process.argv.slice(2);
@@ -36,10 +37,11 @@ const command = args[0],
 const base =
   (process.env.ITINERARY_API_URL ?? 'http://localhost:5173').replace(/\/$/, '') + '/api/v2';
 const token = process.env.ITINERARY_API_TOKEN;
+const client = apiClient(process.env.ITINERARY_API_URL ?? 'http://localhost:5173', token);
 const headers = () => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' });
 async function request(path: string, method = 'GET', body?: unknown, etag?: string) {
   if (!token) throw new Error('Set ITINERARY_API_TOKEN in an ignored environment file');
-  const response = await fetch(base + path, {
+  const response = await client.fetch('/api/v2' + path, {
     method,
     headers: { ...headers(), ...(etag ? { 'X-Trip-Version': etag } : {}) },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -285,11 +287,11 @@ try {
           contentType,
           handleUploadUrl: base + '/uploads/blob',
           clientPayload: JSON.stringify({ tripId, ticketId: ticket.id }),
-          headers: { Authorization: `Bearer ${token}` },
+          headers: Object.fromEntries(client.headers()),
         });
         output(await request(`/trips/${tripId}/tickets/${ticket.id}/finalize`, 'POST', {}));
       } else {
-        const response = await fetch(`${base}/trips/${tripId}/tickets/${ticket.id}/file`, {
+        const response = await client.fetch(`/api/v2/trips/${tripId}/tickets/${ticket.id}/file`, {
           method: 'PUT',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType },
           body: bytes,

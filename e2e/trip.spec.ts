@@ -9,6 +9,7 @@ import {
 const controlURL = `http://127.0.0.1:${Number(process.env.E2E_PORT_OFFSET ?? 0) + 3002}`;
 const clientURL = `http://localhost:${Number(process.env.E2E_PORT_OFFSET ?? 0) + 5173}`;
 test.beforeEach(async ({ request }) => {
+  await expect(await request.post(`${controlURL}/reset`)).toBeOK();
   const headers = { Authorization: 'Bearer e2e-agent-token' };
   const old = await request.get('/api/v2/trips/example-trip', { headers });
   await expect(old).toBeOK();

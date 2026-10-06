@@ -242,7 +242,7 @@ export function createApp(injected?: TripService, injectedAi?: AiService) {
       storage: process.env.STORAGE_DRIVER === 'blob' ? 'blob' : 'file',
       presignedUploads: !!process.env.BLOB_STORE_ID && !process.env.BLOB_READ_WRITE_TOKEN,
       editing: process.env.TRAVEL_EDITING_ENABLED !== 'false',
-      staging: process.env.APP_ENVIRONMENT === 'staging',
+      staging: ['staging', 'ai-preview'].includes(process.env.APP_ENVIRONMENT ?? ''),
       ai: await ai().availability(),
     }),
   );

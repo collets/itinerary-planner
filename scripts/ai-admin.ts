@@ -5,6 +5,7 @@ import { AiBudgetService } from '../src/server/ai-budget.js';
 import { FileStorage } from '../src/server/storage.js';
 import { AiLimitsSchema, Microdollars } from '../src/domain/ai-budget.js';
 import { aiProviders } from '../src/server/ai-config.js';
+import { apiClient } from './api-client.js';
 config({ path: process.env.ITINERARY_ENV_FILE ?? '.env.local', quiet: true });
 const [command, ...args] = process.argv.slice(2);
 try {
@@ -66,22 +67,14 @@ try {
     const token = process.env.ITINERARY_AI_ADMIN_TOKEN;
     if (!token || token.length < 32)
       throw new Error('Set an independent ITINERARY_AI_ADMIN_TOKEN in an ignored environment file');
-    const base = new URL(process.env.ITINERARY_API_URL ?? 'http://localhost:5173');
-    if (
-      base.protocol !== 'https:' &&
-      !(base.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(base.hostname))
-    )
-      throw new Error('Administration requires HTTPS or local development');
-    const response = await fetch(
-      new URL(
-        `/api/v2/ai/admin/${command === 'status' ? 'status' : command === 'reconcile' ? 'reconcile' : 'configure'}`,
-        base,
-      ),
+    const client = apiClient(process.env.ITINERARY_API_URL ?? 'http://localhost:5173', token);
+    const response = await client.fetch(
+      `/api/v2/ai/admin/${command === 'status' ? 'status' : command === 'reconcile' ? 'reconcile' : 'configure'}`,
       {
         method: command === 'status' ? 'GET' : 'POST',
         redirect: 'error',
         signal: AbortSignal.timeout(15_000),
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         ...(body ? { body: JSON.stringify(body) } : {}),
       },
     );

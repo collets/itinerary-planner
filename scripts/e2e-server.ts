@@ -41,7 +41,12 @@ await service.mutate(trip.id, initial.etag, (d) => {
 // Synthetic, network-free AI exercises the production UI without paid calls.
 const ai = new AiService(service, new MockAiProviders());
 await ai.budget.configure(true);
-const api = serve({ fetch: createApp(service, ai).fetch, port: apiPort, hostname: '127.0.0.1' });
+let application = createApp(service, ai);
+const api = serve({
+  fetch: (request) => application.fetch(request),
+  port: apiPort,
+  hostname: '127.0.0.1',
+});
 const client = await preview({
   preview: {
     port: clientPort,
@@ -59,7 +64,11 @@ const control = createServer((_request, response) => {
       response.writeHead(405).end();
       return;
     }
-    if (_request.url === '/offline' && !paused) {
+    if (_request.url === '/reset') {
+      // A fresh application gives each test independent process-local throttles.
+      // Keep the production limits, storage and durable financial ledger intact.
+      application = createApp(service, ai);
+    } else if (_request.url === '/offline' && !paused) {
       await Promise.all([
         new Promise<void>((resolve) => api.close(() => resolve())),
         new Promise<void>((resolve) => client.httpServer.close(() => resolve())),

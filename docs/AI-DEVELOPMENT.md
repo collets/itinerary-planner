@@ -3,6 +3,8 @@
 Work lives on `feature/ai-assistance`, independently of the production release.
 Follow [the implementation plan](AI-IMPLEMENTATION.md) and
 [the security requirements](SECURITY-AUDIT.md#mandatory-design-before-paid-ai).
+Next deployment steps and release gates are in the
+[staging rollout plan](AI-STAGING-ROLLOUT.md).
 
 ## Implemented scope
 
@@ -212,10 +214,20 @@ configured. Main and staging builds are unaffected.
 
 Enabling an AI preview requires branch-specific `AI_PREVIEW_ENABLED=true`,
 `APP_ENVIRONMENT=ai-preview`, `STORAGE_DRIVER=blob`, and a new private
-`BLOB_STORE_ID` matching `AI_PREVIEW_STORE_ID`. Do not inherit the staging seed or
+`BLOB_STORE_ID` matching `AI_PREVIEW_STORE_ID`. `AI_PREVIEW_PROJECT_ID` must match
+the actual `VERCEL_PROJECT_ID`. Use a dedicated project connected only to its
+own test store. Set its project/environment markers in all environments so
+unrelated branches and Production targets skip builds. Assistance on `staging`
+also requires `AI_STAGING_BRANCH_ENABLED=true`; keep that flag false until promotion.
+Do not inherit the staging seed or
 legacy token. Configure separate app/operator credentials too. Do not enable the
 preview until the store is separately connected and the account scope reviewed.
 Paid AI remains independently disabled until its live-use checks are complete.
+
+For protected remote CLI access, set `ITINERARY_VERCEL_BYPASS_SECRET` only in the
+ignored operator environment file. The CLI sends it as an HTTP header alongside
+its independent app/operator credential. HTTPS, an exact API origin and rejected
+redirects prevent forwarding credentials to another host. Do not put it in URLs.
 
 ## Owner checklist before live evaluation
 

@@ -2,9 +2,13 @@ import { MockAiProviders, type AiProviders } from './ai-providers.js';
 import { liveProvidersFromEnvironment } from './ai-live.js';
 
 export function isolatedAiPreview() {
+  const branch = process.env.VERCEL_GIT_COMMIT_REF;
   return (
     process.env.VERCEL_ENV === 'preview' &&
-    process.env.VERCEL_GIT_COMMIT_REF === 'feature/ai-assistance' &&
+    (branch === 'feature/ai-assistance' ||
+      (branch === 'staging' && process.env.AI_STAGING_BRANCH_ENABLED === 'true')) &&
+    !!process.env.AI_PREVIEW_PROJECT_ID &&
+    process.env.AI_PREVIEW_PROJECT_ID === process.env.VERCEL_PROJECT_ID &&
     process.env.AI_PREVIEW_ENABLED === 'true' &&
     process.env.APP_ENVIRONMENT === 'ai-preview' &&
     process.env.STORAGE_DRIVER === 'blob' &&
@@ -16,6 +20,8 @@ export function isolatedAiPreview() {
   );
 }
 export function aiProviders(): AiProviders | undefined {
+  if (process.env.AI_PREVIEW_PROJECT_ID && process.env.VERCEL_ENV === 'production')
+    return undefined;
   const local = !process.env.VERCEL && process.env.STORAGE_DRIVER !== 'blob';
   const preview = isolatedAiPreview();
   if (process.env.AI_MODE === 'mock' && (local || preview)) return new MockAiProviders();

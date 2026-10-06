@@ -39,6 +39,27 @@ async function ready(input = request()) {
 }
 
 describe('AI context, proposals and durable stages', () => {
+  it('throttles AI mutations at thirty per minute without weakening provider idempotency', async () => {
+    vi.stubEnv('AGENT_API_TOKEN_HASH', hashKey('rate-test-agent'));
+    const app = createApp(trips, ai);
+    const original = await trips.read('example-trip');
+    const post = () =>
+      app.request('http://localhost/api/v2/trips/example-trip/ai/requests', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer rate-test-agent',
+          'Content-Type': 'application/json',
+          'X-Trip-Version': original.etag,
+        },
+        body: JSON.stringify(request('same-rate-job')),
+      });
+    for (let index = 0; index < 30; index++) expect((await post()).status).toBe(200);
+    const rejected = await post();
+    expect(rejected.status).toBe(429);
+    expect(Number(rejected.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect((await ai.budget.read()).ledger.runs).toHaveLength(1);
+    expect((await trips.read('example-trip')).etag).toBe(original.etag);
+  });
   it('explains the demo replacement limit instead of treating its duration as a timing request', async () => {
     const job = await ready({
       ...request('replace-demo', 'Sostituisci il museo con un’altra visita di 30 minuti'),

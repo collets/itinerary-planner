@@ -21,6 +21,11 @@ If the local app occupies the default ports, set `E2E_PORT_OFFSET=20` for an
 isolated test server at 5193 (API 3021, control 3022). The default ports used by CI
 remain unchanged.
 
+The localhost-only test control endpoint recreates the application between tests
+to isolate process-local throttles. It preserves real throttle thresholds,
+storage and the durable budget ledger. API tests separately verify the 30/minute
+AI mutation limit. This control endpoint is never included in the deployed API.
+
 Every production build also runs `pnpm check:server`: TypeScript compiles the API and domain code with NodeNext resolution, then plain Node imports the emitted JavaScript and checks health and secure login. Server imports use explicit `.js` extensions so Vercel's native ESM loader can resolve them. This check does not use Vite or tsx, which accept extensionless imports that fail in production.
 
 Mobile Chromium and mobile WebKit workflows cover full-day overview, stop/leg navigation, route POIs, visible timing, no horizontal page overflow, progress, shared ticket upload, traveler filters, explicit offline download, offline deep-link reload, dated EUR budget display, offline checklist synchronization, and first-time PDF rendering offline.

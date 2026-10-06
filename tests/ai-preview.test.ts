@@ -14,6 +14,8 @@ it('keeps feature deployments disabled until explicitly isolated, without affect
     VERCEL_GIT_COMMIT_REF: 'feature/ai-assistance',
     VERCEL_ENV: 'preview',
     AI_PREVIEW_ENABLED: 'true',
+    AI_PREVIEW_PROJECT_ID: 'prj_test',
+    VERCEL_PROJECT_ID: 'prj_test',
     APP_ENVIRONMENT: 'ai-preview',
     STORAGE_DRIVER: 'blob',
     AI_PREVIEW_STORE_ID: 'store_test',
@@ -24,4 +26,20 @@ it('keeps feature deployments disabled until explicitly isolated, without affect
   expect(check({ ...good, STAGING_SEED: 'unexpected-private-seed' })).toBe(0);
   expect(check({ ...good, BLOB_READ_WRITE_TOKEN: 'legacy-shared-credential' })).toBe(0);
   expect(check({ ...good, VERCEL_ENV: 'production' })).toBe(0);
+  expect(check({ ...good, VERCEL_PROJECT_ID: 'prj_production' })).toBe(0);
+  expect(check({ ...good, AI_PREVIEW_PROJECT_ID: '' })).toBe(0);
+  expect(check({ ...good, VERCEL_GIT_COMMIT_REF: 'staging' })).toBe(0);
+  expect(
+    check({ ...good, VERCEL_GIT_COMMIT_REF: 'staging', AI_STAGING_BRANCH_ENABLED: 'true' }),
+  ).toBe(1);
+  expect(
+    check({ ...good, VERCEL_GIT_COMMIT_REF: 'unreviewed', AI_STAGING_BRANCH_ENABLED: 'true' }),
+  ).toBe(0);
+  expect(
+    check({
+      AI_PREVIEW_PROJECT_ID: 'prj_test',
+      VERCEL_GIT_COMMIT_REF: 'main',
+      VERCEL_ENV: 'production',
+    }),
+  ).toBe(0);
 });
