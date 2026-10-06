@@ -83,11 +83,24 @@ See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
   and undo restored the schedule. Nearby-place discovery and a clarification
   follow-up also succeeded. The free routing operation failed, without a plan
   write or monetary liability. The pilot ledger was disabled for investigation.
-  Conservative settled usage is $0.002382; reservations and active operations are
-  zero. No provider key was decrypted and no real itinerary was sent.
+  Later direct replacement routes and a fully specified scenic route both passed.
+  The earlier free routing failure remains unexplained; its operation was not
+  redispatched. No provider key was decrypted and no real itinerary was sent.
 - Provider failure diagnostics now log only an allowlisted hostname, fixed
   category and HTTP status, excluding URLs, credentials, bodies and exception
-  messages. The route-provider failure still needs diagnosis before acceptance.
+  messages. Tests verify HTTP/network diagnostics cannot leak request secrets.
+- Automated evaluation finished after **eight paid requests**, including explicit
+  clarification follow-ups. Verified timing approval/retry/undo, nearby Wikipedia
+  discovery, scenic walking geometry and POI dwell separation, replacement with
+  two measured connections and approval/retry/undo, stale approval rejection,
+  delay around a simulated booking and refusal/clarification for booked-stop
+  replacement. Undo restores the active ordered itinerary while retaining unused
+  archived/catalog records as documented. Conservative settled usage is
+  **$0.006514**, with zero active operations or reservations. The ledger is disabled
+  awaiting the owner's OpenAI Usage check, then live phone acceptance.
+  Provider invoice totals have not been independently inspected.
+- [CI for the evaluated diagnostic commit `03de2c5`](https://github.com/collets/itinerary-planner/actions/runs/37532161016)
+  is green; local checks passed all 107 unit/API tests and production builds.
 - The owner's Data Controls screenshot shows all three sharing options disabled.
   Retain this setting. Discounted sharing is optional and does not eliminate paid
   overage/model exclusions. No setting was changed or inferred to be zero retention.
@@ -100,13 +113,13 @@ See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
 
 | Item                   | Verified value                                                                                     |
 | ---------------------- | -------------------------------------------------------------------------------------------------- |
-| Application commit     | `650ab8aa7e17adeb3333d8363fdb2b2144694edc`                                                         |
+| Application commit     | `03de2c52728fa83bdb13f5342748c979cbbc3b6c`                                                         |
 | Project                | `itinerary-planner-ai-staging` / `prj_7fg1KNP9xQLGjN5Ve867CWyHAFe5`                                |
 | Private store          | `store_vQCAyN5FShZAgVaq`, Frankfurt; one connected project, Preview only                           |
-| Deployment             | `dpl_72p2pZP4EzBrVRbDpiqve2Fr6a5c`, ready, Preview                                                 |
+| Deployment             | `dpl_EmDCHFQpxTTodHxxHispUV4h9a5Q`, ready, Preview                                                 |
 | Stable feature preview | [Open preview](https://itinerary-planner-ai-staging-git-featur-33163c-collets-projects.vercel.app) |
 | Data                   | Fictional Borgo Blu, generated PDF and synthetic public-landmark pilot                             |
-| AI                     | Live provider configuration; ledger disabled pending routing diagnosis; Production disabled        |
+| AI                     | Live configuration; ledger disabled pending owner billing/phone acceptance; Production off         |
 
 Private operator files, credentials and detailed validation evidence remain in
 ignored `local-data/ai-staging/`. The browser key is `access-key.txt` there; it is
@@ -227,7 +240,7 @@ Owner: implementation agent where connectors allow it; owner for account/UI step
 - [x] Generate independent browser/agent/operator keys and session signing secret.
       Store raw credentials only in ignored local files or secret settings;
       store hashes in the application settings. Never use a `VITE_` prefix.
-- [ ] Configure branch-scoped settings, preview protection and available firewall
+- [x] Configure branch-scoped settings, preview protection and available firewall
       rules for login and AI create/advance routes. App authentication and durable
       limits remain mandatory even behind deployment protection.
 - [x] Add optional protected CLI access using an ignored automation secret in the
@@ -293,23 +306,23 @@ their limitation; they do not establish real replacement quality.
 Owner: owner provisions accounts/accepts billing; implementation agent configures
 and evaluates within the expressly approved pilot allowance.
 
-- [ ] Create the dedicated OpenAI project/service credential with only required
+- [x] Create the dedicated OpenAI project/service credential with only required
       inference access; verify model/account availability, enforced cap and alerts.
-- [ ] Provision an OpenRouteService key; verify free-plan quotas, attribution and
+- [x] Provision an OpenRouteService key; verify free-plan quotas, attribution and
       storing route evidence. No paid fallback or automatic upgrade.
-- [ ] Select one exact model compatible with Responses and strict Structured
+- [x] Select one exact model compatible with Responses and strict Structured
       Outputs. Verify current prices/context window/output ceiling, then prepare
       `AI_PRICING_JSON` with a short expiry. Do not use illustrative prices.
-- [ ] Prepare an isolated copy of the real itinerary without real tickets, booking
-      references or traveler identities. Use synthetic booked anchors to test
-      protection. Confirm permission to send its selected-day place/schedule
-      context to providers. Verify sourced entrance coordinates before routing.
-- [ ] First disable the mock ledger. Set server-only keys, `AI_MODE=live`,
+- [x] Prepare synthetic public-landmark itineraries without real tickets, booking
+      references or traveler identities. The owner authorized only this synthetic
+      context. Verify the source monument coordinates, label entrances/access as
+      unverified, and use a clearly simulated booked anchor to test protection.
+- [x] First disable the mock ledger. Set server-only keys, `AI_MODE=live`,
       `AI_LIVE_ENABLED=true`, `AI_PROVIDER_SPEND_CAP_CONFIRMED=true`, and
       `AI_ROUTING_FREE_PLAN_CONFIRMED=true`; keep production permission false.
       Redeploy, validate configuration without inference, then explicitly enable
       the ledger with the approved limits. Preserve its financial history.
-- [ ] Run at most eight deliberately selected requests, stopping at the $1 pilot
+- [x] Run at most eight deliberately selected requests, stopping at the $1 pilot
       limit or any safety failure. Cover replacement with two connecting routes,
       direct/scenic POIs and dwell time, delay around a booking, follow-up,
       unsuitable/unknown alternatives, protected-stop replacement refusal and
@@ -317,7 +330,7 @@ and evaluates within the expressly approved pilot allowance.
 - [ ] Compare route evidence and sources manually, check entrance suitability,
       and record request IDs, latency, failures, reserved/settled costs and provider
       usage privately. Never retry an uncertain charge; reconcile using evidence.
-- [ ] Disable after evaluation and resolve findings before enabling regular
+- [x] Disable after evaluation and resolve findings before enabling regular
       staging access. Do not spend additional funds just to rerun browser tests.
 
 This pilot uses bounded Wikipedia discovery and verified walking routes. Official
@@ -369,12 +382,14 @@ booking changes, invented evidence, unusable routes or failure of the kill switc
 
 Owner actions, requested only when their phase is ready:
 
-- [ ] Connect the new private Blob store if the connector cannot create the binding.
-- [ ] Configure any deployment-protection automation credential needed by the CLI.
-- [ ] Create the dedicated OpenAI project/key and verify hard spend enforcement.
-- [ ] Create the routing account/key and confirm its free-plan/storage terms.
-- [ ] Approve the $1 live pilot and the selected itinerary context.
-- [ ] Complete a short phone acceptance check.
+- [x] Connect the new private Blob store if the connector cannot create the binding.
+- [x] Configure any deployment-protection automation credential needed by the CLI.
+- [x] Create the dedicated OpenAI project/key and verify hard spend enforcement.
+- [x] Create the routing account/key and confirm its free-plan/storage terms.
+- [x] Approve the $1 live pilot and synthetic public-landmark context.
+- [ ] Confirm OpenAI Usage for the dedicated project (eight requests; compare
+      displayed spend with the conservative ledger estimate).
+- [ ] Complete a short live phone acceptance check; mock phone acceptance passed.
 
 The implementation agent can investigate/fix CI, prepare gate/CLI changes, tests,
 synthetic fixtures, configuration templates and PR material before provider setup.
