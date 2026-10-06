@@ -35,6 +35,16 @@ export class MockAiProviders implements AiProviders {
   }
   async plan(context: AiContext): Promise<Charged<AiModelOutput>> {
     const text = context.request.text.toLocaleLowerCase('it');
+    if (/sostitui|alternativ|cambia.*(?:tappa|visita)/.test(text))
+      return {
+        actualCost: 0,
+        value: {
+          message: 'Vuoi sostituire la tappa scelta con un’altra visita.',
+          clarification:
+            'La demo non cerca nuove visite e non calcola nuovi collegamenti. Questa richiesta richiede il servizio AI attivo con percorsi verificati. Puoi intanto provare una modifica degli orari della tappa.',
+          options: [],
+        },
+      };
     const selected =
       context.steps.find((s) => s.id === context.request.stepId) ??
       context.steps.find((s) => s.kind === 'stop' && !s.completed && !s.fixed && !s.booked);

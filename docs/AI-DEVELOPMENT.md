@@ -8,16 +8,23 @@ Follow [the implementation plan](AI-IMPLEMENTATION.md) and
 
 The header button immediately before logout opens a full-screen Italian assistant.
 On the home page it first offers a trip picker. Within a trip it offers a day
-selector, direct/scenic walking preference, natural-language conversation and
+selector, a stop/route selector, direct/scenic walking preference, natural-language conversation and
 proposal widgets with schedule comparisons, street names, POIs and sources.
+Each stop card and detail page has a **Chiedi aiuto** action. Opening the header
+assistant while viewing an active stop also selects that stop. **Sostituisci la
+tappa** and **Accorcia la visita** prepare an editable request; sending remains
+explicit. Conversations are kept separately for each day or selected step.
 `Adatta → Mostra anteprima → Suggerisci percorso e luoghi` includes the unsaved
 manual change in the same proposal. Follow-up turns use current itinerary data
-and up to three brief prior turns. Day conversations are separate.
+and up to three brief prior turns.
 
 The model can suggest delay, timing, skip, reorder within one day, or add a stop
 at an existing/discovered public place. Every change is validated server-side;
 completed, fixed and booked activities remain protected. It cannot buy/cancel
 bookings, change costs, read ticket documents or write directly to the trip.
+Replacement uses a skip and add in one approved batch, with sourced connections
+before and after the new stop. Temporary bypass routes needed to validate the
+intermediate skip are excluded from the final route preview.
 Approval applies the full batch through one conditional trip write and one travel
 history entry. A retry does not apply it twice. A stale or expired proposal cannot
 overwrite newer changes. Undo restores the schedule; unused catalog records and
@@ -44,7 +51,9 @@ ledger and starts the app at http://localhost:5173. The key is in ignored
 `local-data/access-key.txt`. Use the fictional example trip. Try “Siamo in ritardo
 di 30 minuti”, “Accorcia la visita a 20 minuti”, then the route-assistance button
 inside Adatta. Mock mode uses a small deterministic interpreter and existing
-route facts; it is not a demonstration of real model quality. It makes no provider
+route facts; it is not a demonstration of real model quality. Replacement requests
+explain that new visits/connections require the live service; they do not simulate
+research or silently shorten a visit instead. It makes no provider
 requests, including routing/research. Restart ordinary `pnpm dev` without an
 `AI_MODE` setting to hide assistance again.
 

@@ -243,7 +243,9 @@ export class AiService {
       status: 'queued',
       stage:
         request.preference === 'scenic' ||
-        /percors|strad|cammin|luoghi|passegg|punti di interesse|aggiung/i.test(request.text)
+        /percors|strad|cammin|luoghi|passegg|punti di interesse|aggiung|sostitui|alternativ|cambia.*(?:tappa|visita)/i.test(
+          request.text,
+        )
           ? 'research'
           : 'model',
       message: 'Richiesta pronta. Il programma resta invariato.',
@@ -385,17 +387,28 @@ export class AiService {
     );
     const routes = job.routes.filter(
       (r) =>
-        option.routes.some(
+        draft.plan.days
+          .find((day) => day.id === job.request.dayId)
+          ?.stepIds.some((id) => {
+            const step = draft.plan.steps.find((step) => step.id === id);
+            return (
+              step?.kind === 'leg' &&
+              step.mode === 'walk' &&
+              step.fromPlaceId === r.fromPlaceId &&
+              step.toPlaceId === r.toPlaceId
+            );
+          }) &&
+        (option.routes.some(
           (q) =>
             q.fromPlaceId === r.fromPlaceId &&
             q.toPlaceId === r.toPlaceId &&
             JSON.stringify(q.poiPlaceIds) === JSON.stringify(r.pois.map((p) => p.placeId)),
         ) ||
-        (needed.has(`${r.fromPlaceId}:${r.toPlaceId}`) &&
-          !r.pois.length &&
-          !option.routes.some(
-            (q) => q.fromPlaceId === r.fromPlaceId && q.toPlaceId === r.toPlaceId,
-          )),
+          (needed.has(`${r.fromPlaceId}:${r.toPlaceId}`) &&
+            !r.pois.length &&
+            !option.routes.some(
+              (q) => q.fromPlaceId === r.fromPlaceId && q.toPlaceId === r.toPlaceId,
+            ))),
     );
     const proposal: AiProposalInput = {
       id: `proposal-${hash(job.id).slice(0, 40)}-${index}`,

@@ -29,6 +29,8 @@ Return at most two options. Preserve completed, booked and fixed activities; do 
 Use delay, timing, skip, move (within this day), or add (only an existing place or a discovered candidate). Each intention has only the relevant fields; other fields are null.
 For add: stepId=null, placeId and title set, durationMinutes set, minutes=null; afterId identifies an existing stop, start is optional (null uses the previous stop end).
 For delay: only stepId and minutes. Timing: stepId, start and/or durationMinutes. Skip: only stepId. Move: stepId and afterId.
+When request.stepId is supplied, it is the chosen activity; focus changes on it and adjust only necessary neighboring times and connections.
+For replacing an unprotected stop, propose skip of the chosen stop followed by add of one supplied candidate at the same position. Use the preceding surviving stop as afterId, or null when replacing the first stop. Preserve the chosen visit's start and duration unless the user requests otherwise. These actions are reviewed and applied together. Never replace a booked, fixed or completed stop. Request clarification if there is no evidenced suitable alternative.
 Walking routes are requests for the server's routing tool, not estimates made by you. A route connects consecutive remaining stops; select at most three candidate POIs.
 If the user wants scenic walking, suggest relevant public places in the supplied context. Mention unknown opening/entrance access and time needed for pauses.
 Prefer fewer changes, and request clarification if the request is ambiguous or cannot be safely satisfied. Never fabricate a workable schedule around a protected slot.

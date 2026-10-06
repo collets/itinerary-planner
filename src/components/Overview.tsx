@@ -13,6 +13,7 @@ import {
   CalendarDays,
   Users,
   ChevronRight,
+  Sparkles,
 } from 'lucide-react';
 import { useTrip } from '../client/context';
 import { archivedSteps, activeIds, fixedStart } from '../domain/travel';
@@ -238,7 +239,7 @@ export function Overview() {
   );
 }
 function TimelineStep({ step }: { step: Step }) {
-  const { trip, edit, editing } = useTrip();
+  const { trip, edit, editing, aiAvailable, askAi } = useTrip();
   const done = trip.state.progress[step.id] === 'done',
     skipped = trip.state.progress[step.id] === 'skipped';
   const zone = step.timezone ?? trip.plan.timezone;
@@ -322,15 +323,28 @@ function TimelineStep({ step }: { step: Step }) {
           )}
         </div>
       </Link>
-      {fixed && <span className="fixed-label">Orario fisso</span>}
-      {editing && (
-        <button
-          className="step-edit-button"
-          aria-label={`Adatta ${step.title}`}
-          onClick={() => edit({ dayId, stepId: step.id })}
-        >
-          Adatta
-        </button>
+      {(fixed || editing || aiAvailable) && (
+        <div className="step-actions">
+          {fixed && <span className="fixed-label">Orario fisso</span>}
+          {editing && (
+            <button
+              className="step-edit-button"
+              aria-label={`Adatta ${step.title}`}
+              onClick={() => edit({ dayId, stepId: step.id })}
+            >
+              Adatta
+            </button>
+          )}
+          {aiAvailable && (
+            <button
+              className="step-edit-button"
+              aria-label={`Chiedi aiuto per ${step.title}`}
+              onClick={() => askAi({ dayId, stepId: step.id })}
+            >
+              <Sparkles size={14} aria-hidden="true" /> Chiedi aiuto
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

@@ -2328,7 +2328,25 @@ legend {
 }
 .stop-row {
   position: relative;
-  padding-bottom: 34px;
+  row-gap: 6px;
+}
+.step-actions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.step-actions .step-edit-button {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.step-actions .fixed-label {
+  position: static;
+  margin-right: auto;
 }
 .step-edit-button {
   position: absolute;
@@ -2675,6 +2693,11 @@ legend {
 .ai-chat-turn {
   display: grid;
   gap: 12px;
+}
+.ai-stop-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .ai-message {
   margin: 0;

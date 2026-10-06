@@ -4,16 +4,22 @@
 
 The feature branch adds ledger concurrency/rollover/uncertain-charge tests,
 bounded synthetic intent evaluation cases, context privacy, atomic proposals,
-discovered stops, follow-up ownership, protected bookings, independent operator
+discovered stops, atomic middle-stop replacement with both connecting routes and
+undo, follow-up ownership, protected bookings, independent operator
 auth and provider HTTP contract tests. All providers are mocked; no API keys or
 paid model calls are needed. Browser tests additionally cover the header
 assistant's full-screen chat, approval, follow-up, cached/offline draft,
-logout cleanup and a manual draft plus route/POI proposal. Tests use fictional
+logout cleanup, stop selection from cards/details/header, replacement demo limits,
+targeted timing changes, and a manual draft plus route/POI proposal. Tests use fictional
 data and an isolated temporary file store. These checks do not evaluate real
 model quality, physical-phone behavior or routing/account configuration; those
 remain explicit live-evaluation gates in [AI-DEVELOPMENT.md](AI-DEVELOPMENT.md).
 
 `pnpm check` runs TypeScript, ESLint, domain/API tests and the production PWA build. `pnpm test:e2e` uses an isolated temporary store and the actual production build.
+
+If the local app occupies the default ports, set `E2E_PORT_OFFSET=20` for an
+isolated test server at 5193 (API 3021, control 3022). The default ports used by CI
+remain unchanged.
 
 Every production build also runs `pnpm check:server`: TypeScript compiles the API and domain code with NodeNext resolution, then plain Node imports the emitted JavaScript and checks health and secure login. Server imports use explicit `.js` extensions so Vercel's native ESM loader can resolve them. This check does not use Vite or tsx, which accept extensionless imports that fail in production.
 

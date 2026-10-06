@@ -49,6 +49,13 @@ export function AiAssistant({
     activity = useRef(0);
   const key = `ai:${trip.id}:${target.dayId}:${target.stepId ?? 'day'}`;
   const endpoint = `/trips/${trip.id}/ai`;
+  const selectedStep = trip.plan.steps.find((step) => step.id === target.stepId);
+  const protectedStep =
+    selectedStep &&
+    (trip.state.progress[selectedStep.id] === 'done' ||
+      !!trip.travel?.locks[selectedStep.id] ||
+      trip.state.reservations.some((r) => r.stepId === selectedStep.id && r.status === 'booked') ||
+      (selectedStep.kind === 'leg' && selectedStep.mode === 'flight'));
   useEffect(() => {
     alive.current = true;
     void db.meta
@@ -288,9 +295,79 @@ export function AiAssistant({
                 ))}
               </select>
             </label>
+            <label>
+              Tappa da adattare
+              <select
+                aria-label="Tappa da adattare"
+                value={target.stepId ?? ''}
+                disabled={busy || !!draft || (!!job && pending.has(job.status))}
+                onChange={(e) =>
+                  onTarget({
+                    dayId: target.dayId,
+                    ...(e.target.value ? { stepId: e.target.value } : { generic: true }),
+                  })
+                }
+              >
+                <option value="">L’intera giornata</option>
+                {trip.plan.days
+                  .find((day) => day.id === target.dayId)
+                  ?.stepIds.map((id) => {
+                    const step = trip.plan.steps.find((step) => step.id === id)!;
+                    return (
+                      <option key={id} value={id}>
+                        {step.title}
+                      </option>
+                    );
+                  })}
+              </select>
+            </label>
             {target.stepId && (
               <p className="small">
                 Tappa: {trip.plan.steps.find((step) => step.id === target.stepId)?.title}
+              </p>
+            )}
+            {selectedStep?.kind === 'stop' && (
+              <div className="ai-stop-shortcuts" aria-label="Idee per questa tappa">
+                <button
+                  className="button subtle"
+                  disabled={
+                    !loaded ||
+                    busy ||
+                    !!draft ||
+                    !!protectedStep ||
+                    (!!job && pending.has(job.status))
+                  }
+                  onClick={() =>
+                    setText(
+                      `Vorrei sostituire «${selectedStep.title}» con un’altra visita. Quali alternative proponi, considerando gli orari e i percorsi prima e dopo?`,
+                    )
+                  }
+                >
+                  Sostituisci la tappa
+                </button>
+                <button
+                  className="button subtle"
+                  disabled={
+                    !loaded ||
+                    busy ||
+                    !!draft ||
+                    !!protectedStep ||
+                    (!!job && pending.has(job.status))
+                  }
+                  onClick={() =>
+                    setText(
+                      `Vorrei dedicare 30 minuti a «${selectedStep.title}». Come possiamo adattare il programma?`,
+                    )
+                  }
+                >
+                  Accorcia la visita
+                </button>
+              </div>
+            )}
+            {protectedStep && (
+              <p className="small">
+                Questa attività è completata, prenotata o fissa: le proposte manterranno il suo
+                orario e la sua posizione nel programma.
               </p>
             )}
             <label>
@@ -309,6 +386,12 @@ export function AiAssistant({
             <p className="warning-note">
               Demo senza costi: nessuna chiamata AI o ricerca online. Prova “Siamo in ritardo di 30
               minuti”.
+            </p>
+          )}
+          {aiMode === 'mock' && selectedStep?.kind === 'stop' && (
+            <p className="small muted">
+              La demo può adattare gli orari. Sostituzioni con nuove visite e nuovi percorsi
+              richiedono il servizio AI attivo.
             </p>
           )}
           {!online && (
@@ -414,7 +497,11 @@ export function AiAssistant({
               value={text}
               disabled={busy}
               placeholder={
-                job ? 'Vorrei dedicare meno tempo al museo…' : 'Siamo in ritardo di 30 minuti…'
+                job
+                  ? 'Vorrei dedicare meno tempo al museo…'
+                  : selectedStep?.kind === 'stop'
+                    ? 'Vorrei sostituire questa tappa con un’altra visita…'
+                    : 'Siamo in ritardo di 30 minuti…'
               }
               onChange={(e) => setText(e.target.value)}
             />

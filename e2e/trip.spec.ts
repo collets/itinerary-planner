@@ -6,6 +6,8 @@ import {
   type BrowserContext,
   type APIRequestContext,
 } from '@playwright/test';
+const controlURL = `http://127.0.0.1:${Number(process.env.E2E_PORT_OFFSET ?? 0) + 3002}`;
+const clientURL = `http://localhost:${Number(process.env.E2E_PORT_OFFSET ?? 0) + 5173}`;
 test.beforeEach(async ({ request }) => {
   const headers = { Authorization: 'Bearer e2e-agent-token' };
   const old = await request.get('/api/v2/trips/example-trip', { headers });
@@ -32,11 +34,11 @@ const connection = async (
   request: APIRequestContext,
 ) => {
   if (browserName === 'webkit')
-    await request.post(`http://127.0.0.1:3002/${offline ? 'offline' : 'online'}`);
+    await request.post(`${controlURL}/${offline ? 'offline' : 'online'}`);
   else await context.setOffline(offline);
 };
 test.afterEach(async ({ browserName, request }) => {
-  if (browserName === 'webkit') await request.post('http://127.0.0.1:3002/online');
+  if (browserName === 'webkit') await request.post(`${controlURL}/online`);
 });
 const login = async (page: Page) => {
   await page.goto('/');
@@ -53,6 +55,50 @@ const activeSection = async (page: Page, name: string) => {
     navigation.getByRole(name === 'Adesso' ? 'button' : 'link', { name, exact: true }),
   ).toHaveAttribute('aria-current', 'page');
 };
+test('AI assistance targets the selected stop from overview, details and header', async ({
+  page,
+  request,
+}) => {
+  await login(page);
+  const headers = { Authorization: 'Bearer e2e-agent-token' };
+  const read = async () => (await request.get('/api/v2/trips/example-trip', { headers })).json();
+  const before = await read();
+  await page.getByRole('button', { name: 'Chiedi aiuto per Museo del borgo', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Assistente di viaggio' });
+  const target = dialog.getByRole('combobox', { name: 'Tappa da adattare' });
+  const input = dialog.getByRole('textbox', { name: 'Richiesta di assistenza' });
+  await expect(target).toHaveValue('museum');
+  await dialog.getByRole('button', { name: 'Sostituisci la tappa', exact: true }).click();
+  await expect(input).toHaveValue(/sostituire «Museo del borgo»/);
+  await dialog.getByRole('button', { name: 'Invia richiesta', exact: true }).click();
+  await expect(dialog.getByText(/La demo non cerca nuove visite/)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Applica questa proposta' })).toHaveCount(0);
+  expect((await read()).etag).toBe(before.etag);
+  await dialog.getByRole('button', { name: 'Accorcia la visita', exact: true }).click();
+  await expect(input).toHaveValue(/30 minuti a «Museo del borgo»/);
+  await dialog.getByRole('button', { name: 'Invia richiesta', exact: true }).click();
+  const apply = dialog.getByRole('button', { name: 'Applica questa proposta', exact: true });
+  await expect(apply).toBeEnabled();
+  expect((await read()).etag).toBe(before.etag);
+  await apply.click();
+  await expect(dialog.getByRole('status')).toHaveText('Proposta applicata al programma condiviso.');
+  const after = await read();
+  expect(after.trip.plan.steps.find((step: { id: string }) => step.id === 'square')).toEqual(
+    before.trip.plan.steps.find((step: { id: string }) => step.id === 'square'),
+  );
+  const museum = after.trip.plan.steps.find((step: { id: string }) => step.id === 'museum');
+  expect(Date.parse(museum.end) - Date.parse(museum.start)).toBe(30 * 60_000);
+  await dialog.getByRole('button', { name: 'Chiudi', exact: true }).click();
+  await page.getByRole('link', { name: /Museo del borgo/ }).click();
+  await page.getByRole('button', { name: 'Chiedi aiuto per Museo del borgo', exact: true }).click();
+  await expect(target).toHaveValue('museum');
+  await target.selectOption('square');
+  await expect(target).toHaveValue('square');
+  await dialog.getByRole('button', { name: 'Chiudi', exact: true }).click();
+  await page.getByRole('button', { name: 'Apri assistente di viaggio' }).click();
+  await expect(target).toHaveValue('museum');
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+});
 test('AI chat previews, confirms and continues a conversation without implicit writes', async ({
   page,
   request,
@@ -268,7 +314,7 @@ test.describe('Blob provider exchange', () => {
       expect(route.request().headers()['x-content-length']).toBe(String(bytes.length));
       const [, tripId, ticketId] = pathname.split('/');
       const stored = await page.request.put(`/api/v1/trips/${tripId}/tickets/${ticketId}/file`, {
-        headers: { 'Content-Type': 'application/pdf', Origin: 'http://localhost:5173' },
+        headers: { 'Content-Type': 'application/pdf', Origin: clientURL },
         data: bytes,
       });
       await expect(stored).toBeOK();
@@ -666,7 +712,7 @@ test('two phones retain conflicting edits until explicit review and confirmation
 }) => {
   await login(page);
   await download(page);
-  const other = await browser.newContext({ baseURL: 'http://localhost:5173' }),
+  const other = await browser.newContext({ baseURL: clientURL }),
     second = await other.newPage();
   try {
     await login(second);

@@ -39,6 +39,168 @@ async function ready(input = request()) {
 }
 
 describe('AI context, proposals and durable stages', () => {
+  it('explains the demo replacement limit instead of treating its duration as a timing request', async () => {
+    const job = await ready({
+      ...request('replace-demo', 'Sostituisci il museo con un’altra visita di 30 minuti'),
+      stepId: 'museum',
+    });
+    expect(job.status).toBe('clarification');
+    expect(job.message).toContain('servizio AI attivo');
+    expect(job.proposals).toEqual([]);
+    expect((await trips.read('example-trip')).trip.plan).toEqual(exampleTrip().plan);
+  });
+  it('replaces a middle stop with both connections in one approval and one undo', async () => {
+    const initial = await trips.read('example-trip');
+    await trips.mutate('example-trip', initial.etag, (trip) => {
+      const walk = trip.plan.steps.find((step) => step.id === 'walk')!;
+      const museum = trip.plan.steps.find((step) => step.id === 'museum')!;
+      if (walk.kind !== 'leg' || museum.kind !== 'stop') throw new Error('Invalid fixture');
+      trip.plan.steps.push(
+        {
+          ...walk,
+          id: 'walk-back',
+          fromPlaceId: 'blue-museum',
+          toPlaceId: 'blue-garden',
+          start: museum.end,
+          end: '2026-11-12T12:00:00+01:00',
+          pois: [],
+        },
+        {
+          ...museum,
+          id: 'final-stop',
+          title: 'Ultima pausa',
+          placeId: 'blue-garden',
+          start: '2026-11-12T12:00:00+01:00',
+          end: '2026-11-12T12:30:00+01:00',
+        },
+      );
+      trip.plan.days[0].stepIds.push('walk-back', 'final-stop');
+    });
+    const original = await trips.read('example-trip');
+    const discover = vi.spyOn(providers, 'discover').mockResolvedValue({
+      actualCost: 0,
+      value: {
+        places: [
+          {
+            id: 'replacement-park',
+            name: 'Parco di prova',
+            address: 'Borgo Blu',
+            description: 'Fictional replacement',
+            details: '',
+            trivia: '',
+            entrance: '',
+            openingHours: '',
+            sourceIds: [],
+          },
+        ],
+        sources: [],
+        notes: [],
+      },
+    });
+    const plan = vi.spyOn(providers, 'plan').mockResolvedValue({
+      actualCost: 0,
+      value: {
+        message: 'Una visita alternativa.',
+        clarification: null,
+        options: [
+          {
+            title: 'Parco al posto del museo',
+            explanation: 'Synthetic replacement evaluation',
+            actions: [
+              {
+                type: 'skip',
+                stepId: 'museum',
+                placeId: null,
+                title: null,
+                minutes: null,
+                start: null,
+                durationMinutes: null,
+                afterId: null,
+              },
+              {
+                type: 'add',
+                stepId: null,
+                placeId: 'replacement-park',
+                title: 'Visita al parco',
+                minutes: null,
+                start: original.trip.plan.steps.find((step) => step.id === 'museum')!.start,
+                durationMinutes: 90,
+                afterId: 'square',
+              },
+            ],
+            routes: [],
+            sourceIds: [],
+          },
+        ],
+      },
+    });
+    const route = vi.spyOn(providers, 'route').mockImplementation(async (query) => ({
+      actualCost: 0,
+      value: {
+        fromPlaceId: query.fromPlaceId,
+        toPlaceId: query.toPlaceId,
+        durationMinutes: 10,
+        streets: ['Strada di prova'],
+        pois: [],
+        estimate: true,
+        provider: 'mock',
+        checkedAt: new Date(now).toISOString(),
+        directMinutes: 10,
+        extraWalkingMinutes: 0,
+        geometry: [],
+        citations: [],
+      },
+    }));
+    const job = await ready({
+      ...request('replace-middle', 'Sostituisci il museo con un’altra visita'),
+      stepId: 'museum',
+    });
+    expect(job.status, job.message).toBe('ready');
+    expect(discover).toHaveBeenCalledOnce();
+    expect(plan.mock.calls[0][0].request.stepId).toBe('museum');
+    expect(route).toHaveBeenCalledTimes(3);
+    expect((await trips.read('example-trip')).etag).toBe(original.etag);
+    const proposal = job.proposals[0];
+    expect(proposal.commands).toHaveLength(2);
+    expect(proposal.routes.map((leg) => [leg.fromPlaceId, leg.toPlaceId])).toEqual([
+      ['blue-square', 'replacement-park'],
+      ['replacement-park', 'blue-garden'],
+    ]);
+    const applied = await ai.apply(
+      'example-trip',
+      proposal.id,
+      proposal.previewHash,
+      original.etag,
+    );
+    expect(applied.trip.revision).toBe(original.trip.revision + 1);
+    expect(applied.trip.travel!.history).toHaveLength(1);
+    const stops = applied.trip.plan.days[0].stepIds
+      .map((id) => applied.trip.plan.steps.find((step) => step.id === id)!)
+      .filter((step) => step.kind === 'stop');
+    expect(stops.map((step) => step.placeId)).toEqual([
+      'blue-square',
+      'replacement-park',
+      'blue-garden',
+    ]);
+    expect(applied.trip.state.progress.museum).toBe('skipped');
+    expect(applied.trip.state.reservations).toEqual(original.trip.state.reservations);
+    expect(applied.trip.state.tickets).toEqual(original.trip.state.tickets);
+    expect(applied.trip.plan.costs).toEqual(original.trip.plan.costs);
+    const action = { type: 'undo' as const, historyId: proposal.id };
+    const undone = applyTravel(applied.trip, {
+      id: 'undo-replacement',
+      action,
+      routes: [],
+      expected: preconditions(applied.trip, action),
+      at: new Date(now).toISOString(),
+    });
+    expect(undone.plan.days).toEqual(original.trip.plan.days);
+    expect(
+      undone.plan.steps.filter((step) =>
+        original.trip.plan.steps.some((old) => old.id === step.id),
+      ),
+    ).toEqual(original.trip.plan.steps);
+  });
   it('rejects forged administrative or cross-day manual drafts before provider dispatch', async () => {
     const plan = vi.spyOn(providers, 'plan');
     const current = await trips.read('example-trip');

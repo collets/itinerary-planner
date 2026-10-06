@@ -11,6 +11,10 @@ import { hashKey } from '../src/server/auth';
 import { createApp } from '../src/server/app';
 import { AiService } from '../src/server/ai';
 import { MockAiProviders } from '../src/server/ai-providers';
+const portOffset = Number(process.env.E2E_PORT_OFFSET ?? 0);
+const apiPort = 3001 + portOffset;
+const clientPort = 5173 + portOffset;
+const controlPort = 3002 + portOffset;
 const directory = await mkdtemp(join(tmpdir(), 'passo-e2e-'));
 process.env.APP_ACCESS_KEY_HASH = hashKey('e2e-access-key');
 process.env.AGENT_API_TOKEN_HASH = hashKey('e2e-agent-token');
@@ -37,13 +41,13 @@ await service.mutate(trip.id, initial.etag, (d) => {
 // Synthetic, network-free AI exercises the production UI without paid calls.
 const ai = new AiService(service, new MockAiProviders());
 await ai.budget.configure(true);
-const api = serve({ fetch: createApp(service, ai).fetch, port: 3001, hostname: '127.0.0.1' });
+const api = serve({ fetch: createApp(service, ai).fetch, port: apiPort, hostname: '127.0.0.1' });
 const client = await preview({
   preview: {
-    port: 5173,
+    port: clientPort,
     host: 'localhost',
     strictPort: true,
-    proxy: { '/api': { target: 'http://127.0.0.1:3001', changeOrigin: false } },
+    proxy: { '/api': { target: `http://127.0.0.1:${apiPort}`, changeOrigin: false } },
   },
 });
 // Test-only control port: stopping the origin verifies cache-only navigation in WebKit.
@@ -63,15 +67,15 @@ const control = createServer((_request, response) => {
       paused = true;
     } else if (_request.url === '/online' && paused) {
       await Promise.all([
-        new Promise<void>((resolve) => api.listen(3001, '127.0.0.1', resolve)),
-        new Promise<void>((resolve) => client.httpServer.listen(5173, 'localhost', resolve)),
+        new Promise<void>((resolve) => api.listen(apiPort, '127.0.0.1', resolve)),
+        new Promise<void>((resolve) => client.httpServer.listen(clientPort, 'localhost', resolve)),
       ]);
       paused = false;
     }
     response.writeHead(200).end('ok');
   })().catch(() => response.writeHead(500).end());
 });
-control.listen(3002, '127.0.0.1');
+control.listen(controlPort, '127.0.0.1');
 const close = async () => {
   control.close();
   api.close();

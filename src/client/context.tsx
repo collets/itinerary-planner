@@ -151,12 +151,21 @@ export function TripShell() {
   useEffect(() => {
     if (!query.data || !config.ai?.enabled || new URLSearchParams(search).get('assistant') !== '1')
       return;
-    const current = currentStep(query.data.trip);
+    const viewedId = pathname.match(/\/steps\/([a-z0-9-]+)$/)?.[1];
+    const viewed = query.data.trip.plan.steps.find((step) => step.id === viewedId);
+    const activeViewed =
+      viewed && query.data.trip.plan.days.some((day) => day.stepIds.includes(viewed.id))
+        ? viewed
+        : undefined;
+    const current = activeViewed ?? currentStep(query.data.trip);
     const day =
       query.data.trip.plan.days.find((d) => current && d.stepIds.includes(current.id)) ??
       query.data.trip.plan.days[0];
     setEditor(null);
-    setAssistant({ dayId: day.id, generic: true });
+    setAssistant({
+      dayId: day.id,
+      ...(activeViewed ? { stepId: activeViewed.id } : { generic: true }),
+    });
     const params = new URLSearchParams(search);
     params.delete('assistant');
     navigate(`${pathname}${params.size ? `?${params}` : ''}`, { replace: true });

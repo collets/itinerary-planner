@@ -16,6 +16,7 @@ import {
   BookOpen,
   Lightbulb,
   Phone,
+  Sparkles,
 } from 'lucide-react';
 import { useTrip, ErrorPanel } from '../client/context';
 import {
@@ -67,7 +68,7 @@ export function SourceList({ ids }: { ids: string[] }) {
   );
 }
 export function Details() {
-  const { trip, changeProgress, notify, edit, editing } = useTrip();
+  const { trip, changeProgress, notify, edit, editing, askAi, aiAvailable } = useTrip();
   const { stepId } = useParams();
   const navigate = useNavigate();
   const steps = orderedSteps(trip.plan),
@@ -201,6 +202,18 @@ export function Details() {
             }
           >
             {archived ? 'Reinserisci o annota' : 'Adatta questa tappa'}
+          </button>
+        )}
+        {!archived && aiAvailable && (
+          <button
+            className="button subtle full adapt-button"
+            aria-label={`Chiedi aiuto per ${step.title}`}
+            onClick={() => askAi({ dayId: day.id, stepId: step.id })}
+          >
+            <Sparkles size={17} />
+            {step.kind === 'stop'
+              ? 'Chiedi aiuto per questa tappa'
+              : 'Chiedi aiuto per questo percorso'}
           </button>
         )}
         {trip.travel?.notes[step.id] && <p className="travel-note">{trip.travel.notes[step.id]}</p>}
