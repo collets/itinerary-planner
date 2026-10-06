@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import { config } from 'dotenv';
 import { parse } from 'yaml';
 import patch from 'fast-json-patch';
-import { upload } from '@vercel/blob/client';
+import { upload, uploadPresigned } from '@vercel/blob/client';
 import {
   TripSchema,
   PlanSchema,
@@ -282,13 +282,17 @@ try {
       const ticket = created.trip.state.tickets.at(-1);
       const configuration = await request('/config');
       if (configuration.storage === 'blob') {
-        await upload(ticket.pathname, new Blob([bytes], { type: contentType }), {
-          access: 'private',
-          contentType,
-          handleUploadUrl: base + '/uploads/blob',
-          clientPayload: JSON.stringify({ tripId, ticketId: ticket.id }),
-          headers: Object.fromEntries(client.headers()),
-        });
+        await (configuration.presignedUploads ? uploadPresigned : upload)(
+          ticket.pathname,
+          new Blob([bytes], { type: contentType }),
+          {
+            access: 'private',
+            contentType,
+            handleUploadUrl: base + '/uploads/blob',
+            clientPayload: JSON.stringify({ tripId, ticketId: ticket.id }),
+            headers: Object.fromEntries(client.headers()),
+          },
+        );
         output(await request(`/trips/${tripId}/tickets/${ticket.id}/finalize`, 'POST', {}));
       } else {
         const response = await client.fetch(`/api/v2/trips/${tripId}/tickets/${ticket.id}/file`, {

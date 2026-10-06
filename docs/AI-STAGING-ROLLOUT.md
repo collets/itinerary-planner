@@ -21,24 +21,55 @@ See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
   process throttles returned 429 for AI mutations and a later login. The test-only
   server now recreates its application between tests, preserving production limits
   and the durable ledger. A regression verifies the 30/minute AI mutation limit.
-  The next release commit still requires green remote CI.
-- The latest feature deployment is canceled by the intentional isolation guard.
-  The current Vercel project has SSO deployment protection enabled.
+  [Remote CI for the evaluated application commit `be471db`](https://github.com/collets/itinerary-planner/actions/runs/37495318087)
+  is green. The CLI upload compatibility follow-up requires its own CI gate.
+- The isolated feature Preview is ready and has SSO deployment protection enabled.
+  The project's first Git deployment targeted Production and was correctly canceled
+  by the guard. The evaluated deployment used the documented Preview request
+  (omit `target`); its response confirms `target: null`.
 - Real provider credentials, model/pricing selection, routing account terms,
   source coordinates and account-level spend enforcement still need verification.
 - Runtime/build gates now require matching project and store IDs. The reviewed
   staging branch is supported behind a separate opt-in, currently false.
 - Protected CLI transport and the visible AI-preview staging indicator are
-  implemented; deployment validation follows store connection.
+  implemented and verified online. The CLI selects presigned OIDC uploads from
+  `/config`, matching the browser, while retaining legacy token compatibility.
 - Dedicated project and private Frankfurt store are created. Independent
-  credentials and an automation bypass are prepared privately. Mock mode is
-  configured; preview building and the financial ledger remain disabled.
-- Next owner action: connect the **itinerary-planner-ai-staging** store to the
-  **itinerary-planner-ai-staging** project with **Preview only** and OIDC.
+  credentials and an automation bypass are prepared privately. The owner connected
+  the store to this project for **Preview only**, with OIDC and no legacy token.
+  Mock mode and the ledger are enabled with $1/month, $1/day and $0.25/request
+  limits; no live provider keys are present.
+- Deployed checks passed: protected deployment, anonymous/admin role denials,
+  same-origin browser login, hostile-origin rejection, no plan writes before
+  approval, tampered proposal rejection, exactly-once approval, undo and the
+  independent disable/re-enable switch. Ledger spending/reservations are zero.
+- A generated test PDF uploaded privately through OIDC and opened through the
+  authenticated API; anonymous reads were denied. One focused mobile Chromium
+  smoke confirmed the full-screen dialog, selected museum and approval flow.
+  The fictional itinerary was restored afterward; no real itinerary was imported.
+- Next owner action: a real-phone acceptance check of the mock preview. Live
+  provider setup and billing authorization remain subsequent gates.
 - Automatic approval review rejected enabling automatic system-variable exposure
   as broader exposure without specific authorization. The setting remains
-  unchanged. Missing system metadata will fail the existing gate closed; inspect
-  the actual deployment before deciding whether any setting change is necessary.
+  unchanged. The actual Preview build passed the metadata checks without this
+  change; no broader exposure setting was needed.
+
+### Evaluated deployment metadata
+
+| Item                   | Verified value                                                                                     |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| Application commit     | `be471dbeff52cc4870162f02cd77971b29bddf24`                                                         |
+| Project                | `itinerary-planner-ai-staging` / `prj_7fg1KNP9xQLGjN5Ve867CWyHAFe5`                                |
+| Private store          | `store_vQCAyN5FShZAgVaq`, Frankfurt; one connected project, Preview only                           |
+| Deployment             | `dpl_77KCzDFYRq7PyztsvfFBMjca3fSz`, ready, Preview                                                 |
+| Stable feature preview | [Open preview](https://itinerary-planner-ai-staging-git-featur-33163c-collets-projects.vercel.app) |
+| Data                   | Fictional Borgo Blu itinerary and generated test PDF                                               |
+| AI                     | Mock; live/production flags false; no provider credentials                                         |
+
+Private operator files, credentials and detailed validation evidence remain in
+ignored `local-data/ai-staging/`. The browser key is `access-key.txt` there; it is
+independent of production and the local development key. Keep Vercel protection
+enabled and sign in with the authorized Vercel account when opening the preview.
 
 ## Deployment arrangement
 
@@ -76,16 +107,16 @@ Separate projects are not a promise of separate infrastructure usage allowances.
 
 Owner: implementation agent; provider account attestations belong to the owner.
 
-- [ ] Inspect CI traces/API responses and fix the two WebKit failures. Use focused
+- [x] Inspect CI traces/API responses and fix the two WebKit failures. Use focused
       checks locally; run the complete required pipeline on the release commit.
       Do not add retries or weaken approval assertions to hide an unknown failure.
 - [ ] Review authentication, origin checks, request limits, private Blob/OIDC
       scope, typed actions, booking protection and server-only provider secrets.
       Recheck duplicate dispatch, uncertain-charge holds and independent admin
       authorization where deployment changes affect them.
-- [ ] Keep the durable budget disabled until the target store and credentials
+- [x] Keep the durable budget disabled until the target store and credentials
       are verified. Confirm the operator can read and disable it independently.
-- [ ] Propose these pilot limits: **$1/month, $1/day, $0.25/request**, twelve
+- [x] Propose these pilot limits: **$1/month, $1/day, $0.25/request**, twelve
       operations/request. This bounds the initial evaluation across requests;
       no automatic allowance increase or financial ledger reset.
 - [ ] Verify the selected model's full-window reservation fits the request cap.
@@ -112,25 +143,25 @@ disable path verified without a provider call.
 
 Owner: implementation agent where connectors allow it; owner for account/UI steps.
 
-- [ ] Create the dedicated project and private European-region store. Connect
+- [x] Create the dedicated project and private European-region store. Connect
       only that store to its Preview environment using OIDC. New connections use
       [short-lived OIDC authentication](https://vercel.com/changelog/vercel-blob-now-supports-oidc-authentication);
       no copied legacy Blob token is needed.
-- [ ] Generate independent browser/agent/operator keys and session signing secret.
+- [x] Generate independent browser/agent/operator keys and session signing secret.
       Store raw credentials only in ignored local files or secret settings;
       store hashes in the application settings. Never use a `VITE_` prefix.
 - [ ] Configure branch-scoped settings, preview protection and available firewall
       rules for login and AI create/advance routes. App authentication and durable
       limits remain mandatory even behind deployment protection.
-- [ ] Add optional protected CLI access using an ignored automation secret in the
+- [x] Add optional protected CLI access using an ignored automation secret in the
       `x-vercel-protection-bypass` header, restricted to the configured HTTPS
       deployment host with rejected redirects. Retain app/operator authentication.
       Keep the secret out of URLs, logs, exports and frontend code.
-- [ ] Verify provider upload callbacks still work with preview protection; retain
+- [x] Verify provider upload callbacks still work with preview protection; retain
       private PDF storage and authenticated original-file access.
-- [ ] Make the UI visibly identify AI staging, including the `ai-preview`
-      environment. The current staging indicator recognizes only `staging`.
-- [ ] Build guard must skip this project's unrelated branches and reject
+- [x] Make the UI visibly identify AI staging, including the `ai-preview`
+      environment.
+- [x] Build guard must skip this project's unrelated branches and reject
       Production targets, mismatched store IDs, legacy tokens and inherited seeds.
 
 Initial feature-branch settings:
@@ -163,17 +194,17 @@ works. Record only non-secret configuration metadata in the rollout notes.
 
 Owner: implementation agent; owner for a brief real-phone acceptance check.
 
-- [ ] Deploy the green feature commit. Start with an empty store and import only
+- [x] Deploy the green feature commit. Start with an empty store and import only
       fictional test data through the authenticated API/CLI.
-- [ ] Enable the mock ledger with the independent operator CLI and the proposed
+- [x] Enable the mock ledger with the independent operator CLI and the proposed
       pilot limits. No provider account is needed for this stage.
 - [ ] Verify stop entry points/selection, timing changes, proposal comparison,
       explicit approval, undo, manual-draft inclusion and stale-plan rejection.
 - [ ] Verify private PDF upload/open, offline draft/read behavior, reconnect without
       automatic requests, logout cleanup and protected booked/completed activities.
-- [ ] Verify unauthenticated AI/admin requests are rejected and ordinary family or
+- [x] Verify unauthenticated AI/admin requests are rejected and ordinary family or
       itinerary-agent credentials cannot administer spending controls.
-- [ ] Demonstrate disable/status/re-enable using mock requests. Record the target
+- [x] Demonstrate disable/status/re-enable using mock requests. Record the target
       commit, store identity and outcome. Keep phone/browser testing focused.
 
 Exit gate: owner can use the preview on a phone, private storage works, and the
