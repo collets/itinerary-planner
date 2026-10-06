@@ -22,7 +22,8 @@ See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
   server now recreates its application between tests, preserving production limits
   and the durable ledger. A regression verifies the 30/minute AI mutation limit.
   [Remote CI for the evaluated application commit `be471db`](https://github.com/collets/itinerary-planner/actions/runs/37495318087)
-  is green. The CLI upload compatibility follow-up requires its own CI gate.
+  is green. [CI for the CLI upload compatibility follow-up `635b156`](https://github.com/collets/itinerary-planner/actions/runs/37497472091)
+  is also green; its automatic Preview deployment is ready.
 - The isolated feature Preview is ready and has SSO deployment protection enabled.
   The project's first Git deployment targeted Production and was correctly canceled
   by the guard. The evaluated deployment used the documented Preview request
@@ -47,8 +48,36 @@ See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
   authenticated API; anonymous reads were denied. One focused mobile Chromium
   smoke confirmed the full-screen dialog, selected museum and approval flow.
   The fictional itinerary was restored afterward; no real itinerary was imported.
-- Next owner action: a real-phone acceptance check of the mock preview. Live
-  provider setup and billing authorization remain subsequent gates.
+- The owner confirmed the real-phone mock adjustment flow works. Mock acceptance
+  is complete. The owner also supplied saved project-limit and edit-dialog evidence
+  confirming a $5/month OpenAI project cap with hard enforcement enabled and a
+  100% spend alert. Project identity and evidence are recorded privately.
+- The owner confirmed the requested OpenAI credential setup. Vercel metadata
+  verifies `OPENAI_API_KEY` is sensitive and **Preview only** in the isolated
+  project. The secret was not decrypted and its scopes were not independently
+  inspected. Only response creation is required (`api.responses.write`). No paid
+  request has validated this credential; live mode remains disabled.
+- The owner confirmed free routing setup and supplied the Basic Key quota screen:
+  Directions V2 has 2,000 requests available and a 40/minute limit. Vercel metadata
+  verifies `OPENROUTESERVICE_API_KEY` is sensitive and **Preview only**. Current
+  [HeiGIT terms](https://account.heigit.org/info/tos) were read from the rendered
+  account app: route results use CC BY-SA 4.0 and require HeiGIT/OpenStreetMap
+  attribution. The adapter now preserves this attribution and license in proposal
+  citations and approved leg details. Only public-place coordinates are sent.
+- Next owner action: initialize the isolated project's edge API rate limit through
+  its Vercel Firewall dashboard. Configuration reads and the create attempt return
+  `Seawall Config not found` (404) through the connector; the Vercel CLI is absent.
+  No successful firewall mutation was reported. Use one fixed-window rule for
+  paths starting with `/api`, 100 requests/60 seconds per IP, returning 429.
+  This covers normal API paths and the direct function rewrite alias. Keep SSO
+  protection enabled; do not add an environment condition. Hobby currently includes
+  one rate limit rule and one million allowed requests; review the platform's pricing
+  dialog and avoid upgrades. See [Vercel limits](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting).
+- The proposed live model is `gpt-6-luna`; preparation is described below. Live
+  dispatch, the increased per-request allowance and the paid pilot remain unapproved.
+- The owner's Data Controls screenshot shows all three sharing options disabled.
+  Retain this setting. Discounted sharing is optional and does not eliminate paid
+  overage/model exclusions. No setting was changed or inferred to be zero retention.
 - Automatic approval review rejected enabling automatic system-variable exposure
   as broader exposure without specific authorization. The setting remains
   unchanged. The actual Preview build passed the metadata checks without this
@@ -58,10 +87,10 @@ See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
 
 | Item                   | Verified value                                                                                     |
 | ---------------------- | -------------------------------------------------------------------------------------------------- |
-| Application commit     | `be471dbeff52cc4870162f02cd77971b29bddf24`                                                         |
+| Application commit     | `635b15608361052f33917331b05a48897b33e584`                                                         |
 | Project                | `itinerary-planner-ai-staging` / `prj_7fg1KNP9xQLGjN5Ve867CWyHAFe5`                                |
 | Private store          | `store_vQCAyN5FShZAgVaq`, Frankfurt; one connected project, Preview only                           |
-| Deployment             | `dpl_77KCzDFYRq7PyztsvfFBMjca3fSz`, ready, Preview                                                 |
+| Deployment             | `dpl_Dipy74bPYuND8uZWYdhjmTBvF4qX`, ready, Preview                                                 |
 | Stable feature preview | [Open preview](https://itinerary-planner-ai-staging-git-featur-33163c-collets-projects.vercel.app) |
 | Data                   | Fictional Borgo Blu itinerary and generated test PDF                                               |
 | AI                     | Mock; live/production flags false; no provider credentials                                         |
@@ -122,7 +151,7 @@ Owner: implementation agent; provider account attestations belong to the owner.
 - [ ] Verify the selected model's full-window reservation fits the request cap.
       Prices must include applicable token surcharges. If it does not fit, choose
       another verified compatible model or seek a separately approved cap change.
-- [ ] For live operation, verify a dedicated OpenAI project's enforced hard spend
+- [x] For live operation, verify a dedicated OpenAI project's enforced hard spend
       limit and alerts before setting the account-attestation flag. Recommend a
       $5 provider cap as a separate account safeguard, subject to account settings.
       [Official OpenAI documentation](https://developers.openai.com/api/docs/guides/spend-limits)
@@ -135,6 +164,38 @@ Pilot limit file, stored in ignored `local-data/ai-staging-limits.json`:
 ```json
 { "monthly": 1000000, "daily": 1000000, "request": 250000, "operations": 12 }
 ```
+
+### Proposed live model and reservation
+
+Current [OpenAI model documentation](https://developers.openai.com/api/docs/models/gpt-6-luna)
+documents Responses, strict Structured Outputs, a 1,050,000-token context and
+`reasoning.effort=none` for `gpt-6-luna`. GPT-5 mini was considered initially, but
+its current page labels it deprecated. GPT-6 Luna is the proposed first pilot model;
+account availability has not yet been verified by an inference request.
+
+[Standard pricing](https://developers.openai.com/api/docs/pricing), verified on
+2026-10-06, is $0.10/million input, $0.125/million cache writes and $0.50/million
+output for short context. Long-context cache writes are $0.25/million and output
+is $0.75/million. The proposed price file conservatively uses the latter pair for
+all usage, without assuming caching discounts. API requests use default Standard
+processing on the global endpoint, with no regional-processing or fast-mode premium.
+Settled token costs in the application ledger therefore remain conservative
+estimates rather than a reproduction of the provider invoice.
+
+Reserve the complete documented context plus 4,096 output tokens:
+`1,050,000 × $0.25 / 1,000,000 + 4,096 × $0.75 / 1,000,000 = $0.265572`.
+The old $0.25/request limit correctly rejects this before dispatch. The prepared
+proposal is **$0.30/request**, retaining **$1/month and $1/day** and twelve
+operations/request. This change requires owner confirmation before updating the
+durable ledger. The model schema now accepts its actual full context instead of
+understating it; the 24 KB application context limit remains enforced.
+
+Ignored `local-data/ai-staging/live-pricing.json` contains this seven-day price
+verification and `proposed-live-limits.json` contains the unapproved limits.
+Neither is enabled remotely. Hosted search stays disabled and routing/research
+must remain zero cost. Use only synthetic evaluation data with sourced public
+landmark coordinates for the initial pilot. Request the $1 pilot authorization
+after the firewall and CI gates; seek separate approval before real trip context.
 
 Exit gate: required CI green, security review findings resolved, and the operator
 disable path verified without a provider call.

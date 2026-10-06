@@ -22,7 +22,7 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const timestamp = z.iso.datetime();
 export const UsageBoundsSchema = z
   .object({
-    inputTokens: z.number().int().nonnegative().max(1_000_000),
+    inputTokens: z.number().int().nonnegative().max(1_050_000),
     outputTokens: z.number().int().nonnegative().max(100_000),
     searches: z.number().int().nonnegative().max(5),
     routes: z.number().int().nonnegative().max(10),

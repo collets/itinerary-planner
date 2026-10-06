@@ -10,6 +10,11 @@ import { aiProviders } from '../src/server/ai-config';
 import { aiContext, AiRequestSchema, withDiscovery } from '../src/domain/ai';
 import { exampleTrip } from '../src/domain/fixture';
 import { MockAiProviders } from '../src/server/ai-providers';
+import { AiBudgetService } from '../src/server/ai-budget';
+import { FileStorage } from '../src/server/storage';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const now = Date.parse('2026-10-05T12:00:00Z');
 // Synthetic unit prices and coordinates. They are not live provider prices or
@@ -18,6 +23,7 @@ const config: LiveAiConfig = {
   model: 'unit-test-model',
   contextWindow: 8192,
   maxOutputTokens: 1024,
+  reasoningEffort: 'none',
   price: {
     id: 'unit-test-price',
     inputPerMillion: 100_000,
@@ -79,6 +85,49 @@ function directions(duration = 600, distance = 800) {
 }
 
 describe('OpenAI Responses adapter contracts', () => {
+  it('reserves large-context cache-write exposure and blocks it under the original request cap', async () => {
+    const live = new LiveAiProviders(
+      {
+        ...config,
+        contextWindow: 1_050_000,
+        maxOutputTokens: 4096,
+        reasoningEffort: 'none',
+        price: { ...config.price, inputPerMillion: 250_000, outputPerMillion: 750_000 },
+      },
+      key,
+      routeKey,
+      () => now,
+    );
+    const maximum = live.modelBound(context());
+    expect(maximum).toBe(265_572);
+    const directory = await mkdtemp(join(tmpdir(), 'passo-context-budget-'));
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const budget = new AiBudgetService(new FileStorage(directory), () => now);
+      await budget.configure(true, {
+        monthly: 1_000_000,
+        daily: 1_000_000,
+        request: 250_000,
+        operations: 12,
+      });
+      await budget.start({
+        id: 'large-context',
+        scope: 'example-trip',
+        requestHash: 'a'.repeat(64),
+      });
+      await expect(
+        budget.reserve('large-context', {
+          id: 'inference',
+          fingerprint: 'b'.repeat(64),
+          maxCost: maximum,
+        }),
+      ).rejects.toMatchObject({ code: 'limit' });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it('uses one strict stateless call without hosted tools, browser fields, retries or retained responses', async () => {
     const output = await result();
     const fetch = vi.fn().mockResolvedValue(
@@ -110,6 +159,7 @@ describe('OpenAI Responses adapter contracts', () => {
       tools: [],
       truncation: 'disabled',
       max_output_tokens: 1024,
+      reasoning: { effort: 'none' },
       text: { format: { type: 'json_schema', strict: true } },
     });
     expect(body).not.toHaveProperty('previous_response_id');
@@ -206,6 +256,14 @@ describe('bounded routing and secondary-source research', () => {
       ],
       pois: [{ placeId: 'blue-garden', detourMinutes: 5, visitMinutes: 5 }],
     });
+    expect(charged.value.citations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: '© openrouteservice by HeiGIT | Data from OpenStreetMap',
+        }),
+        expect.objectContaining({ url: 'https://creativecommons.org/licenses/by-sa/4.0/' }),
+      ]),
+    );
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(String(fetch.mock.calls[0][0])).toBe(
       'https://api.heigit.org/openrouteservice/v2/directions/foot-walking/geojson',

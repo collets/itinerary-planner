@@ -16,8 +16,9 @@ export const LiveAiConfigSchema = z
     model: z.string().regex(/^[a-z0-9][a-z0-9.-]{0,99}$/),
     // Reserve the verified model's entire possible input context, not an average
     // prompt estimate. Hidden framing or provider-added context cannot escape it.
-    contextWindow: z.number().int().min(8192).max(1_000_000),
+    contextWindow: z.number().int().min(8192).max(1_050_000),
     maxOutputTokens: z.number().int().min(512).max(4096),
+    reasoningEffort: z.enum(['none', 'low', 'medium']).optional(),
     price: AiPriceSchema,
   })
   .strict();
@@ -195,6 +196,9 @@ export class LiveAiProviders implements AiProviders {
           instructions,
           input: JSON.stringify(context),
           max_output_tokens: this.config.maxOutputTokens,
+          ...(this.config.reasoningEffort
+            ? { reasoning: { effort: this.config.reasoningEffort } }
+            : {}),
           text: {
             format: {
               type: 'json_schema',
@@ -367,10 +371,18 @@ export class LiveAiProviders implements AiProviders {
         geometry,
         citations: [
           {
-            title: 'OpenRouteService · OpenStreetMap',
+            title: '© openrouteservice by HeiGIT | Data from OpenStreetMap',
             url: 'https://openrouteservice.org/',
             description:
               'Percorso calcolato su dati OpenStreetMap. Tempi indicativi: condizioni e accessibilità sul posto possono variare.',
+            checkedAt: new Date(this.now()).toISOString(),
+            estimate: false,
+          },
+          {
+            title: 'Licenza dei risultati del percorso · CC BY-SA 4.0',
+            url: 'https://creativecommons.org/licenses/by-sa/4.0/',
+            description:
+              'I risultati di openrouteservice sono distribuiti con licenza Creative Commons Attribuzione-Condividi allo stesso modo 4.0.',
             checkedAt: new Date(this.now()).toISOString(),
             estimate: false,
           },
