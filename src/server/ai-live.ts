@@ -53,8 +53,25 @@ export async function providerJson(
     !['api.openai.com', 'api.heigit.org', 'it.wikipedia.org'].includes(parsed.hostname)
   )
     throw new Error('Provider destination rejected');
-  const response = await fetch(parsed, { ...init, signal, redirect: 'error' });
-  if (!response.ok) throw new Error('Provider rejected request');
+  let response: Response;
+  try {
+    response = await fetch(parsed, { ...init, signal, redirect: 'error' });
+  } catch (error) {
+    // URLs, headers, bodies and exception messages can contain private data.
+    console.warn('AI provider failure', {
+      provider: parsed.hostname,
+      category: signal.aborted ? 'aborted' : 'network',
+    });
+    throw error;
+  }
+  if (!response.ok) {
+    console.warn('AI provider failure', {
+      provider: parsed.hostname,
+      category: 'http',
+      status: response.status,
+    });
+    throw new Error('Provider rejected request');
+  }
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Provider response missing');
   const chunks: Uint8Array[] = [];
@@ -302,7 +319,15 @@ export class LiveAiProviders implements AiProviders {
       signal,
       2_000_000,
     );
-    return directionsSchema.parse(raw).features[0];
+    const result = directionsSchema.safeParse(raw);
+    if (!result.success) {
+      console.warn('AI provider failure', {
+        provider: 'api.heigit.org',
+        category: 'contract',
+      });
+      throw new Error('Routing response contract rejected');
+    }
+    return result.data.features[0];
   }
   async route(query: RouteQuery, trip: Trip, signal: AbortSignal): Promise<Charged<AiRoute>> {
     this.validateRoute(query, trip);

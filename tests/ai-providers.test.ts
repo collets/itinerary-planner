@@ -52,6 +52,7 @@ const json = (value: unknown, status = 200) =>
     { status, headers: { 'Content-Type': 'application/json' } },
   );
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -349,6 +350,42 @@ describe('bounded routing and secondary-source research', () => {
     ).rejects.toThrow('destination rejected');
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][1].redirect).toBe('error');
+  });
+});
+describe('private provider failure diagnostics', () => {
+  it('reports failure categories without disclosing credentials, URLs or error bodies', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response('SECRET provider response', { status: 403 }));
+    vi.stubGlobal('fetch', fetch);
+    await expect(
+      providerJson(
+        'https://api.heigit.org/openrouteservice/v2/directions/foot-walking/geojson?private=SECRET',
+        { headers: { Authorization: 'SECRET credential' }, body: 'SECRET payload' },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('Provider rejected request');
+    expect(warn).toHaveBeenCalledWith('AI provider failure', {
+      provider: 'api.heigit.org',
+      category: 'http',
+      status: 403,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+    fetch.mockRejectedValueOnce(new TypeError('SECRET transport exception'));
+    await expect(
+      providerJson(
+        'https://api.heigit.org/openrouteservice/v2/directions/foot-walking/geojson',
+        {},
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('SECRET transport exception');
+    expect(warn).toHaveBeenLastCalledWith('AI provider failure', {
+      provider: 'api.heigit.org',
+      category: 'network',
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
 describe('owner-only provider activation gates', () => {

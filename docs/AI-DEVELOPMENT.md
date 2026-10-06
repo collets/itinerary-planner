@@ -99,6 +99,12 @@ does not implement unrestricted web search or official opening-hours lookup.
 Hosted search stays disabled until its complete billing/context bound can be
 proved and reserved. No model-selected URL is fetched.
 
+Provider failures log only the allowlisted host, a fixed category and (for HTTP
+rejections) the status code. Routing response contract failures use a fixed
+category. Headers, request URLs, payloads, provider error bodies and exception
+messages are omitted. Diagnostics do not change dispatch ownership, settlement
+or the prohibition on automatic provider retries.
+
 Contracts were checked against primary documentation on 2026-10-05:
 [Responses](https://developers.openai.com/api/reference/python/resources/responses/methods/create),
 [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs),

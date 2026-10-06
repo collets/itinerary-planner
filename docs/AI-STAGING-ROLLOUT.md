@@ -1,8 +1,8 @@
 # AI staging rollout plan
 
-Date: 2026-10-06. Status: execution authorized by the owner; account attestations
-and a paid pilot still require owner confirmation. This document is not a billing
-authorization.
+Date: 2026-10-06. Status: execution and a $1 synthetic live pilot authorized by
+the owner. Account attestations and pilot evidence are recorded below; this
+document does not authorize an expanded budget or use of real trip context.
 
 Goal: make stop replacement, day adjustments and walking/POI advice available
 for private staging evaluation, with verified spending controls and a reversible
@@ -39,7 +39,7 @@ See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
   credentials and an automation bypass are prepared privately. The owner connected
   the store to this project for **Preview only**, with OIDC and no legacy token.
   Mock mode and the ledger are enabled with $1/month, $1/day and $0.25/request
-  limits; no live provider keys are present.
+  limits. Provider credentials were subsequently added as described below.
 - Deployed checks passed: protected deployment, anonymous/admin role denials,
   same-origin browser login, hostile-origin rejection, no plan writes before
   approval, tampered proposal rejection, exactly-once approval, undo and the
@@ -64,8 +64,11 @@ See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
   account app: route results use CC BY-SA 4.0 and require HeiGIT/OpenStreetMap
   attribution. The adapter now preserves this attribution and license in proposal
   citations and approved leg details. Only public-place coordinates are sent.
-- Next owner action: initialize the isolated project's edge API rate limit through
-  its Vercel Firewall dashboard. Configuration reads and the create attempt return
+- The owner published the edge API rate limit and supplied enabled-rule and
+  settings screenshots: paths starting with `/api`, fixed-window 100 requests
+  per 60 seconds per IP, returning 429, without an environment condition.
+  This is dashboard evidence, not an independent API inspection of the project
+  association. Configuration reads and the create attempt return
   `Seawall Config not found` (404) through the connector; the Vercel CLI is absent.
   No successful firewall mutation was reported. Use one fixed-window rule for
   paths starting with `/api`, 100 requests/60 seconds per IP, returning 429.
@@ -73,8 +76,18 @@ See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
   protection enabled; do not add an environment condition. Hobby currently includes
   one rate limit rule and one million allowed requests; review the platform's pricing
   dialog and avoid upgrades. See [Vercel limits](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting).
-- The proposed live model is `gpt-6-luna`; preparation is described below. Live
-  dispatch, the increased per-request allowance and the paid pilot remain unapproved.
+- The owner approved the $1 synthetic live pilot and $0.30/request cap, retaining
+  $1/day and $1/month. Live settings are scoped to `feature/ai-assistance` Preview;
+  Production and staging branch gates remain disabled. The first deployed model
+  test succeeded: a synthetic visit was shortened, approval applied exactly once,
+  and undo restored the schedule. Nearby-place discovery and a clarification
+  follow-up also succeeded. The free routing operation failed, without a plan
+  write or monetary liability. The pilot ledger was disabled for investigation.
+  Conservative settled usage is $0.002382; reservations and active operations are
+  zero. No provider key was decrypted and no real itinerary was sent.
+- Provider failure diagnostics now log only an allowlisted hostname, fixed
+  category and HTTP status, excluding URLs, credentials, bodies and exception
+  messages. The route-provider failure still needs diagnosis before acceptance.
 - The owner's Data Controls screenshot shows all three sharing options disabled.
   Retain this setting. Discounted sharing is optional and does not eliminate paid
   overage/model exclusions. No setting was changed or inferred to be zero retention.
@@ -87,13 +100,13 @@ See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
 
 | Item                   | Verified value                                                                                     |
 | ---------------------- | -------------------------------------------------------------------------------------------------- |
-| Application commit     | `635b15608361052f33917331b05a48897b33e584`                                                         |
+| Application commit     | `650ab8aa7e17adeb3333d8363fdb2b2144694edc`                                                         |
 | Project                | `itinerary-planner-ai-staging` / `prj_7fg1KNP9xQLGjN5Ve867CWyHAFe5`                                |
 | Private store          | `store_vQCAyN5FShZAgVaq`, Frankfurt; one connected project, Preview only                           |
-| Deployment             | `dpl_Dipy74bPYuND8uZWYdhjmTBvF4qX`, ready, Preview                                                 |
+| Deployment             | `dpl_72p2pZP4EzBrVRbDpiqve2Fr6a5c`, ready, Preview                                                 |
 | Stable feature preview | [Open preview](https://itinerary-planner-ai-staging-git-featur-33163c-collets-projects.vercel.app) |
-| Data                   | Fictional Borgo Blu itinerary and generated test PDF                                               |
-| AI                     | Mock; live/production flags false; no provider credentials                                         |
+| Data                   | Fictional Borgo Blu, generated PDF and synthetic public-landmark pilot                             |
+| AI                     | Live provider configuration; ledger disabled pending routing diagnosis; Production disabled        |
 
 Private operator files, credentials and detailed validation evidence remain in
 ignored `local-data/ai-staging/`. The browser key is `access-key.txt` there; it is
@@ -139,7 +152,7 @@ Owner: implementation agent; provider account attestations belong to the owner.
 - [x] Inspect CI traces/API responses and fix the two WebKit failures. Use focused
       checks locally; run the complete required pipeline on the release commit.
       Do not add retries or weaken approval assertions to hide an unknown failure.
-- [ ] Review authentication, origin checks, request limits, private Blob/OIDC
+- [x] Review authentication, origin checks, request limits, private Blob/OIDC
       scope, typed actions, booking protection and server-only provider secrets.
       Recheck duplicate dispatch, uncertain-charge holds and independent admin
       authorization where deployment changes affect them.
@@ -148,7 +161,7 @@ Owner: implementation agent; provider account attestations belong to the owner.
 - [x] Propose these pilot limits: **$1/month, $1/day, $0.25/request**, twelve
       operations/request. This bounds the initial evaluation across requests;
       no automatic allowance increase or financial ledger reset.
-- [ ] Verify the selected model's full-window reservation fits the request cap.
+- [x] Verify the selected model's full-window reservation fits the request cap.
       Prices must include applicable token surcharges. If it does not fit, choose
       another verified compatible model or seek a separately approved cap change.
 - [x] For live operation, verify a dedicated OpenAI project's enforced hard spend
@@ -184,18 +197,21 @@ estimates rather than a reproduction of the provider invoice.
 
 Reserve the complete documented context plus 4,096 output tokens:
 `1,050,000 × $0.25 / 1,000,000 + 4,096 × $0.75 / 1,000,000 = $0.265572`.
-The old $0.25/request limit correctly rejects this before dispatch. The prepared
-proposal is **$0.30/request**, retaining **$1/month and $1/day** and twelve
-operations/request. This change requires owner confirmation before updating the
-durable ledger. The model schema now accepts its actual full context instead of
+The old $0.25/request limit correctly rejects this before dispatch. The owner
+approved **$0.30/request**, retaining **$1/month and $1/day** and twelve
+operations/request, and these exact limits were verified in the durable ledger.
+The model schema now accepts its actual full context instead of
 understating it; the 24 KB application context limit remains enforced.
 
 Ignored `local-data/ai-staging/live-pricing.json` contains this seven-day price
-verification and `proposed-live-limits.json` contains the unapproved limits.
-Neither is enabled remotely. Hosted search stays disabled and routing/research
+verification and `proposed-live-limits.json` contains the approved limits.
+The price configuration is enabled only on the isolated feature Preview. Hosted
+search stays disabled and routing/research
 must remain zero cost. Use only synthetic evaluation data with sourced public
-landmark coordinates for the initial pilot. Request the $1 pilot authorization
-after the firewall and CI gates; seek separate approval before real trip context.
+landmark coordinates for the initial pilot. Seek separate approval before real
+trip context or any allowance increase. Failed/uncertain operations are not
+automatically redispatched; a settled clarification can receive an explicit new
+follow-up request within the approved budget.
 
 Exit gate: required CI green, security review findings resolved, and the operator
 disable path verified without a provider call.
