@@ -220,7 +220,7 @@ export function Details() {
         {!archived &&
           aiAvailable &&
           step.kind === 'stop' &&
-          ['visit', 'meal'].includes(step.category) && (
+          ['visit', 'meal', 'free-time'].includes(step.category) && (
             <button
               className="button subtle full adapt-button"
               onClick={() => askAi({ dayId: day.id, stepId: step.id, purpose: 'information' })}
