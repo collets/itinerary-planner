@@ -411,14 +411,32 @@ export class LiveAiProviders implements AiProviders {
       },
       signal,
     );
-    return readResearch(
-      raw,
-      query,
-      researchPrice(this.config.price, this.config.enrichment!),
-      this.config.contextWindow,
-      this.config.maxOutputTokens,
-      this.now(),
-    );
+    try {
+      return readResearch(
+        raw,
+        query,
+        researchPrice(this.config.price, this.config.enrichment!),
+        this.config.contextWindow,
+        this.config.maxOutputTokens,
+        this.now(),
+      );
+    } catch (error) {
+      // Unknown usage remains held. Diagnose only fixed contract fields, never
+      // exception messages, response text, places, queries or credentials.
+      const fields = new Set(['status', 'service_tier', 'usage', 'output']);
+      console.warn('AI research usage unavailable', {
+        category: error instanceof z.ZodError ? 'contract' : 'usage-bound',
+        ...(error instanceof z.ZodError
+          ? {
+              issues: error.issues.slice(0, 8).map((issue) => ({
+                code: issue.code,
+                field: fields.has(String(issue.path[0])) ? String(issue.path[0]) : 'reply',
+              })),
+            }
+          : {}),
+      });
+      throw error;
+    }
   }
   get informationAvailable() {
     return !!this.config.enrichment;

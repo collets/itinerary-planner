@@ -181,4 +181,20 @@ describe('Bounded hosted research', () => {
     raw.output[1].content![0].text = JSON.stringify(facts);
     expect(readResearch(raw, query, price, 1050000, 4096, now).value).toBeNull();
   });
+  it('diagnoses unknown usage fields without logging provider values or treating them as free', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const raw = {
+      ...response(),
+      usage: { input_tokens: 'SECRET_PROVIDER_VALUE', output_tokens: 500 },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(raw))));
+    await expect(
+      provider().enrich(query, new AbortController().signal, 'usage-diagnostic'),
+    ).rejects.toThrow();
+    expect(warn).toHaveBeenCalledWith('AI research usage unavailable', {
+      category: 'contract',
+      issues: [{ code: 'invalid_type', field: 'usage' }],
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+  });
 });

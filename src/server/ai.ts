@@ -323,7 +323,7 @@ export class AiService {
     }
     return this.get(tripId, job.id);
   }
-  private async bounded<T>(fn: (signal: AbortSignal) => Promise<T>) {
+  private async bounded<T>(fn: (signal: AbortSignal) => Promise<T>, research = false) {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -331,6 +331,8 @@ export class AiService {
         fn(controller.signal),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
+            if (research)
+              console.warn('AI research deadline reached', { milliseconds: this.timeoutMs });
             controller.abort();
             reject(new Error('AI stage deadline'));
           }, this.timeoutMs);
@@ -859,7 +861,7 @@ export class AiService {
             maxCost: provider.enrichmentBound(),
           });
           const value = await this.budget.dispatch(id, operation, () =>
-            this.bounded((signal) => provider.enrich!(query, signal, operation)),
+            this.bounded((signal) => provider.enrich!(query, signal, operation), true),
           );
           if (!value && job.request.purpose !== 'information') {
             // Known charges are already settled. Missing optional facts must not

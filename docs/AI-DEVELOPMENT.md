@@ -153,6 +153,9 @@ Invalid model replies log only a fixed completion/JSON category. Contract
 failures log the persisted stage, validation codes and allowlisted field paths;
 values, unknown field names and validation messages are excluded. Known usage
 is settled even when a reply cannot safely produce a proposal.
+Research deadlines log only their configured duration; unverified usage contracts
+log fixed categories, validation codes and allowlisted root fields. These logs
+do not establish billing or release a spending reservation.
 
 Contracts were checked against primary documentation on 2026-10-05:
 [Responses](https://developers.openai.com/api/reference/python/resources/responses/methods/create),
