@@ -501,6 +501,9 @@ export class AiService {
       explanation: option.explanation,
       warnings: [
         'Le proposte non modificano o cancellano prenotazioni. Verifica aperture e disponibilità.',
+        ...job.discovery.notes.filter((note) =>
+          note.startsWith('Informazioni non verificate per '),
+        ),
       ],
       commands,
       information: job.information.filter((update) =>
@@ -799,6 +802,22 @@ export class AiService {
           const value = await this.budget.dispatch(id, operation, () =>
             this.bounded((signal) => provider.enrich!(query, signal, operation)),
           );
+          if (!value && job.request.purpose !== 'information') {
+            // Known charges are already settled. Missing optional facts must not
+            // prevent a separately sourced place/route proposal. Never retry.
+            await update((j) => {
+              j.discovery.notes = [
+                ...j.discovery.notes,
+                `Informazioni non verificate per «${query.name}»: orari, prezzi e dettagli restano da verificare.`,
+              ].slice(-6);
+              j.informationIndex++;
+              const done = j.informationIndex >= j.informationQueue.length;
+              j.informationRound = done ? 1 : 0;
+              j.stage = done ? 'model' : 'information';
+              j.status = 'planning';
+            });
+            return this.get(tripId, id);
+          }
           if (!value)
             throw new AiPlanError(
               'invalid',

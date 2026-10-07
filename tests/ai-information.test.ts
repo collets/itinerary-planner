@@ -6,7 +6,8 @@ import { exampleTrip } from '../src/domain/fixture';
 import { AiRequestSchema, projectAiProposal } from '../src/domain/ai';
 import { applyTravel, preconditions } from '../src/domain/travel';
 import { AiService } from '../src/server/ai';
-import { MockAiProviders } from '../src/server/ai-providers';
+import { MockAiProviders, type Charged } from '../src/server/ai-providers';
+import type { PlaceInformation } from '../src/domain/place-information';
 import { TripService } from '../src/server/service';
 import { FileStorage } from '../src/server/storage';
 import { information } from './fixtures/place-information';
@@ -18,10 +19,16 @@ class ResearchMock extends MockAiProviders {
   enrichmentBound() {
     return 50000;
   }
-  enrich = vi.fn(async (_query: EnrichmentQuery, _signal: AbortSignal, _requestId: string) => ({
-    value: information(),
-    actualCost: 10000,
-  }));
+  enrich = vi.fn(
+    async (
+      _query: EnrichmentQuery,
+      _signal: AbortSignal,
+      _requestId: string,
+    ): Promise<Charged<PlaceInformation | null>> => ({
+      value: information(),
+      actualCost: 10000,
+    }),
+  );
 }
 let directory: string, trips: TripService, ai: AiService, provider: ResearchMock;
 beforeEach(async () => {
@@ -183,61 +190,78 @@ describe('Place research orchestration and approval', () => {
     expect(provider.enrich).not.toHaveBeenCalled();
     expect((await ai.budget.read()).ledger.runs).toHaveLength(0);
   });
-  it('researches added stops once, passes their windows to replanning, and keeps evidence in the approved proposal', async () => {
-    const output = {
-      message: 'Aggiungo il giardino.',
-      clarification: null,
-      lookups: [],
-      options: [
-        {
-          title: 'Aggiungi visita',
-          explanation: 'Una visita aggiuntiva.',
-          actions: [
-            {
-              type: 'add' as const,
-              stepId: null,
-              placeId: 'blue-garden',
-              title: 'Il giardino',
-              minutes: null,
-              start: '2026-11-12T12:00:00+01:00',
-              durationMinutes: 30,
-              afterId: 'museum',
-            },
-          ],
-          routes: [],
-          sourceIds: [],
+  it.each([true, false])(
+    'researches added stops once and preserves approval when optional evidence is accepted=%s',
+    async (accepted) => {
+      if (!accepted) provider.enrich.mockResolvedValue({ value: null, actualCost: 10000 });
+      const output = {
+        message: 'Aggiungo il giardino.',
+        clarification: null,
+        lookups: [],
+        options: [
+          {
+            title: 'Aggiungi visita',
+            explanation: 'Una visita aggiuntiva.',
+            actions: [
+              {
+                type: 'add' as const,
+                stepId: null,
+                placeId: 'blue-garden',
+                title: 'Il giardino',
+                minutes: null,
+                start: '2026-11-12T12:00:00+01:00',
+                durationMinutes: 30,
+                afterId: 'museum',
+              },
+            ],
+            routes: [],
+            sourceIds: [],
+          },
+        ],
+      };
+      const plan = vi.spyOn(provider, 'plan').mockResolvedValue({ value: output, actualCost: 0 });
+      vi.spyOn(provider, 'route').mockImplementation(async (query) => ({
+        actualCost: 0,
+        value: {
+          fromPlaceId: query.fromPlaceId,
+          toPlaceId: query.toPlaceId,
+          pois: [],
+          durationMinutes: 15,
+          directMinutes: 15,
+          extraWalkingMinutes: 0,
+          streets: ['Via sintetica'],
+          estimate: true,
+          provider: 'mock' as const,
+          checkedAt: new Date(now).toISOString(),
+          geometry: [],
+          citations: [],
         },
-      ],
-    };
-    const plan = vi.spyOn(provider, 'plan').mockResolvedValue({ value: output, actualCost: 0 });
-    vi.spyOn(provider, 'route').mockImplementation(async (query) => ({
-      actualCost: 0,
-      value: {
-        fromPlaceId: query.fromPlaceId,
-        toPlaceId: query.toPlaceId,
-        pois: [],
-        durationMinutes: 15,
-        directMinutes: 15,
-        extraWalkingMinutes: 0,
-        streets: ['Via sintetica'],
-        estimate: true,
-        provider: 'mock' as const,
-        checkedAt: new Date(now).toISOString(),
-        geometry: [],
-        citations: [],
-      },
-    }));
-    const { job, original } = await run('add-with-research', 'adapt');
-    expect(job.status, job.message).toBe('ready');
-    expect(plan).toHaveBeenCalledTimes(2);
-    expect(provider.enrich).toHaveBeenCalledTimes(1);
-    expect(
-      plan.mock.calls[1][0].places.find((p) => p.id === 'blue-garden')?.visitInformation,
-    ).toMatchObject({ visitDate: '2026-11-12', openingHours: { visitStatus: 'open' } });
-    const projected = projectAiProposal(original.trip, job.proposals[0]);
-    expect(projected.plan.places.find((p) => p.id === 'blue-garden')!.information).toEqual(
-      information(),
-    );
-    expect((await trips.read('example-trip')).etag).toBe(original.etag);
-  });
+      }));
+      const { job, original } = await run('add-with-research', 'adapt');
+      expect(job.status, job.message).toBe('ready');
+      expect(plan).toHaveBeenCalledTimes(2);
+      expect(provider.enrich).toHaveBeenCalledTimes(1);
+      const visitInformation = plan.mock.calls[1][0].places.find(
+        (p) => p.id === 'blue-garden',
+      )?.visitInformation;
+      if (accepted)
+        expect(visitInformation).toMatchObject({
+          visitDate: '2026-11-12',
+          openingHours: { visitStatus: 'open' },
+        });
+      else {
+        expect(visitInformation).toBeNull();
+        expect(job.proposals[0].information).toEqual([]);
+        expect(
+          job.proposals[0].warnings.some((w) => w.startsWith('Informazioni non verificate per ')),
+        ).toBe(true);
+        expect(await ai.budget.status()).toMatchObject({ monthly: 10000, reserved: 0, active: 0 });
+      }
+      const projected = projectAiProposal(original.trip, job.proposals[0]);
+      expect(projected.plan.places.find((p) => p.id === 'blue-garden')!.information).toEqual(
+        accepted ? information() : undefined,
+      );
+      expect((await trips.read('example-trip')).etag).toBe(original.etag);
+    },
+  );
 });

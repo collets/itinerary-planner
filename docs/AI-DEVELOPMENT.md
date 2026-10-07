@@ -364,6 +364,12 @@ incomplete or uncited facts. Unknown charges remain held for operator resolution
 All stages count against the existing request/day/month/operation limits. No
 price/budget increase or failed-call retry occurs automatically.
 
+If automatically researched facts are rejected after known usage is settled,
+itinerary planning can continue with a visible warning and no information overlay.
+The independent place and route evidence remains mandatory. An explicit information
+update fails without changing the stop if no facts are acceptable. Unknown charges,
+budget failures and cancellations still stop the request.
+
 Citations must match actual hosted search sources or URL annotations. Public
 HTTPS links have no credentials, query, fragment or local/IP destinations and
 are only rendered, never fetched by our server. Official classification is a
