@@ -39,6 +39,54 @@ async function ready(input = request()) {
 }
 
 describe('AI context, proposals and durable stages', () => {
+  it('stops after one lookup round even if the model requests another search', async () => {
+    const plan = vi
+      .spyOn(providers, 'plan')
+      .mockResolvedValue({
+        actualCost: 0,
+        value: {
+          message: 'Cerco.',
+          clarification: null,
+          options: [],
+          lookups: [{ name: 'Wawel', area: 'Cracovia' }],
+        },
+      });
+    const lookup = vi.spyOn(providers, 'lookup');
+    const before = await trips.read('example-trip');
+    const job = await ready(request('no-search-loop', 'Aggiungi Wawel'));
+    expect(job.status).toBe('failed');
+    expect(job.message).toContain('ricerca disponibile è terminata');
+    expect(plan).toHaveBeenCalledTimes(2);
+    expect(lookup).toHaveBeenCalledOnce();
+    expect((await trips.read('example-trip')).etag).toBe(before.etag);
+    expect((await ai.budget.status()).reserved).toBe(0);
+  });
+  it('refuses the second model call when the settled first charge leaves insufficient request budget', async () => {
+    await ai.budget.configure(true, {
+      monthly: 1_000_000,
+      daily: 1_000_000,
+      request: 300_000,
+      operations: 12,
+    });
+    vi.spyOn(providers, 'modelBound').mockReturnValue(265_572);
+    const plan = vi
+      .spyOn(providers, 'plan')
+      .mockResolvedValue({
+        actualCost: 40_000,
+        value: {
+          message: 'Cerco.',
+          clarification: null,
+          options: [],
+          lookups: [{ name: 'Wawel', area: 'Cracovia' }],
+        },
+      });
+    const before = await trips.read('example-trip');
+    const job = await ready(request('lookup-cap', 'Aggiungi Wawel'));
+    expect(job.status).toBe('failed');
+    expect(plan).toHaveBeenCalledOnce();
+    expect((await trips.read('example-trip')).etag).toBe(before.etag);
+    expect(await ai.budget.status()).toMatchObject({ monthly: 40_000, reserved: 0, active: 0 });
+  });
   it('throttles AI mutations at thirty per minute without weakening provider idempotency', async () => {
     vi.stubEnv('AGENT_API_TOKEN_HASH', hashKey('rate-test-agent'));
     const app = createApp(trips, ai);
@@ -121,6 +169,7 @@ describe('AI context, proposals and durable stages', () => {
     const plan = vi.spyOn(providers, 'plan').mockResolvedValue({
       actualCost: 0,
       value: {
+        lookups: [],
         message: 'Una visita alternativa.',
         clarification: null,
         options: [
@@ -366,15 +415,22 @@ describe('AI context, proposals and durable stages', () => {
     expect(context).toContain('"booked":true');
     expect(context).toContain('https://example.com/museum');
   });
-  it('adds a discovered place with sourced connections only after approval, and undoes the schedule', async () => {
+  it('looks up a requested landmark, resumes once, adds both sourced connections after approval, and undoes the schedule', async () => {
     const original = await trips.read('example-trip');
-    vi.spyOn(providers, 'discover').mockResolvedValue({
+    await ai.budget.configure(true, {
+      monthly: 1_000_000,
+      daily: 1_000_000,
+      request: 300_000,
+      operations: 12,
+    });
+    vi.spyOn(providers, 'modelBound').mockReturnValue(265_572);
+    const lookup = vi.spyOn(providers, 'lookup').mockResolvedValue({
       actualCost: 0,
       value: {
         places: [
           {
             id: 'new-garden',
-            name: 'Giardino di prova',
+            name: 'Castello del Wawel',
             address: 'Borgo Blu',
             description: 'Fictional evaluation candidate',
             details: '',
@@ -395,33 +451,45 @@ describe('AI context, proposals and durable stages', () => {
         notes: [],
       },
     });
-    vi.spyOn(providers, 'plan').mockResolvedValue({
-      actualCost: 0,
-      value: {
-        message: 'Una pausa in più.',
-        clarification: null,
-        options: [
-          {
-            title: 'Una sosta al giardino',
-            explanation: 'Proposta sintetica di prova',
-            actions: [
-              {
-                type: 'add',
-                stepId: null,
-                placeId: 'new-garden',
-                title: 'Pausa al giardino',
-                minutes: null,
-                start: null,
-                durationMinutes: 20,
-                afterId: 'square',
-              },
-            ],
-            routes: [],
-            sourceIds: ['garden-source'],
-          },
-        ],
-      },
-    });
+    const plan = vi
+      .spyOn(providers, 'plan')
+      .mockResolvedValueOnce({
+        actualCost: 1000,
+        value: {
+          message: 'Cerco il castello.',
+          clarification: null,
+          options: [],
+          lookups: [{ name: 'Castello del Wawel', area: 'Cracovia' }],
+        },
+      })
+      .mockResolvedValue({
+        actualCost: 1000,
+        value: {
+          lookups: [],
+          message: 'Una pausa in più.',
+          clarification: null,
+          options: [
+            {
+              title: 'Una sosta al giardino',
+              explanation: 'Proposta sintetica di prova',
+              actions: [
+                {
+                  type: 'add',
+                  stepId: null,
+                  placeId: 'new-garden',
+                  title: 'Pausa al giardino',
+                  minutes: null,
+                  start: '2026-11-12T14:00:00+01:00',
+                  durationMinutes: 20,
+                  afterId: 'square',
+                },
+              ],
+              routes: [],
+              sourceIds: ['garden-source'],
+            },
+          ],
+        },
+      });
     vi.spyOn(providers, 'route').mockImplementation(async (query) => ({
       actualCost: 0,
       value: {
@@ -439,8 +507,35 @@ describe('AI context, proposals and durable stages', () => {
         citations: [],
       },
     }));
-    const job = await ready(request('add-candidate', 'Aggiungi una pausa in un giardino'));
+    const input = request(
+      'add-candidate',
+      'aggiungi una tappa al castello di cracovia nel pomeriggio',
+    );
+    let job = await ai.create('example-trip', input, original.etag);
+    job = await ai.advance('example-trip', job.id); // nearby research
+    job = await ai.advance('example-trip', job.id); // requests named lookup
+    expect(job.status).toBe('planning');
+    expect(lookup).not.toHaveBeenCalled();
+    // Refresh/restart at the persisted tool boundary must not repeat the first paid call.
+    ai = new AiService(trips, providers, () => now, 100);
+    job = await ready(input);
     expect(job.status, job.message).toBe('ready');
+    expect(plan).toHaveBeenCalledTimes(2);
+    expect(plan.mock.calls[0][0].lookupAvailable).toBe(true);
+    expect(plan.mock.calls[1][0].lookupAvailable).toBe(false);
+    expect(plan.mock.calls[1][0].places.some((p) => p.name === 'Castello del Wawel')).toBe(true);
+    expect(plan.mock.calls.map((args) => args[2])).toEqual([
+      'add-candidate-model',
+      'add-candidate-model-1',
+    ]);
+    expect(lookup).toHaveBeenCalledOnce();
+    expect(lookup.mock.calls[0][0]).toEqual([{ name: 'Castello del Wawel', area: 'Cracovia' }]);
+    await ai.advance('example-trip', job.id);
+    expect(plan).toHaveBeenCalledTimes(2);
+    const ledger = (await ai.budget.read()).ledger;
+    expect(
+      ledger.runs[0].operations.filter((op) => op.id.includes('model')).map((op) => op.actualCost),
+    ).toEqual([1000, 1000]);
     expect((await trips.read('example-trip')).etag).toBe(original.etag);
     const proposal = job.proposals[0];
     expect(proposal.places).toHaveLength(1);

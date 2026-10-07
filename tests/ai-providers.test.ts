@@ -86,6 +86,90 @@ function directions(duration = 600, distance = 800) {
 }
 
 describe('OpenAI Responses adapter contracts', () => {
+  it('keeps named lookup required in the strict provider schema', () => {
+    expect(modelJsonSchema.required).toContain('lookups');
+  });
+  it('resolves named landmarks with sourced coordinates, without forwarding the prompt or credentials', async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      json({
+        query: {
+          pages: {
+            '123': {
+              pageid: 123,
+              title: 'Castello del Wawel',
+              index: 1,
+              extract: 'Synthetic evidence, not actual Wawel coordinates.',
+              coordinates: [{ lat: 45.002, lon: 12.002, globe: 'earth' }],
+            },
+            '124': {
+              pageid: 124,
+              title: 'Unrelated distant landmark',
+              index: 2,
+              coordinates: [{ lat: 55, lon: 15, globe: 'earth' }],
+            },
+            '125': { pageid: 125, title: 'No coordinates', index: 3 },
+          },
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    const trip = locatedTrip();
+    trip.plan.travellers[0].name = 'SECRET_TRAVELLER_NAME';
+    const found = (
+      await provider().lookup(
+        [{ name: 'Castello del Wawel', area: 'Cracovia' }],
+        trip,
+        new AbortController().signal,
+      )
+    ).value;
+    expect(found.places).toHaveLength(1);
+    expect(found.places[0]).toMatchObject({
+      name: 'Castello del Wawel',
+      coordinates: { lat: 45.002, lng: 12.002, verifiedOn: '2026-10-05' },
+      openingHours: 'Da verificare.',
+    });
+    expect(found.sources[0]).toMatchObject({
+      status: 'verified_secondary',
+      url: 'https://it.wikipedia.org/?curid=123',
+    });
+    const [url, init] = fetch.mock.calls[0];
+    expect(url.hostname).toBe('it.wikipedia.org');
+    expect(url.searchParams.get('gsrsearch')).toBe('Castello del Wawel Cracovia');
+    expect(url.searchParams.get('gsrlimit')).toBe('3');
+    expect(init.redirect).toBe('error');
+    expect(JSON.stringify(fetch.mock.calls)).not.toContain('SECRET');
+    expect(init.headers).not.toHaveProperty('Authorization');
+    expect(withDiscovery(trip, found).plan.places).toHaveLength(4);
+  });
+  it('rejects URL/operator lookups before dispatch and reports empty results without inventing points', async () => {
+    const fetch = vi.fn().mockResolvedValue(json({ batchcomplete: '' }));
+    vi.stubGlobal('fetch', fetch);
+    await expect(
+      provider().lookup(
+        [{ name: 'https://internal.example', area: 'Cracovia' }],
+        locatedTrip(),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      provider().lookup(
+        [{ name: 'Wawel insource:SECRET', area: 'Cracovia' }],
+        locatedTrip(),
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+    const found = (
+      await provider().lookup(
+        [{ name: 'Missing landmark', area: 'Cracovia' }],
+        locatedTrip(),
+        new AbortController().signal,
+      )
+    ).value;
+    expect(found.places).toEqual([]);
+    expect(found.notes.join(' ')).toContain('Nessun risultato');
+    expect(fetch).toHaveBeenCalledOnce();
+  });
   it('reserves large-context cache-write exposure and blocks it under the original request cap', async () => {
     const live = new LiveAiProviders(
       {
@@ -170,7 +254,7 @@ describe('OpenAI Responses adapter contracts', () => {
     expect(modelJsonSchema).toMatchObject({
       type: 'object',
       additionalProperties: false,
-      required: ['message', 'clarification', 'options'],
+      required: ['message', 'clarification', 'lookups', 'options'],
     });
   });
   it('preserves a known charge when the model refuses, truncates or produces unusable JSON', async () => {

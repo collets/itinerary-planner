@@ -53,10 +53,26 @@ export const AiIntentSchema = z
     afterId: Id.nullable(),
   })
   .strict();
+// Only public landmark names and a city/area can cross the research boundary.
+// No URLs, search operators, credentials or arbitrary tool parameters.
+const publicName = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .regex(/^[\p{L}\p{M}\p{N} ,'’()-]+$/u);
+export const AiPlaceLookupSchema = z
+  .object({ name: publicName(120), area: publicName(80) })
+  .strict();
+export const AiPlaceLookupsSchema = z.array(AiPlaceLookupSchema).max(2);
+export type AiPlaceLookup = z.infer<typeof AiPlaceLookupSchema>;
 export const AiModelOutputSchema = z
   .object({
     message: z.string().max(3000),
     clarification: z.string().max(1000).nullable(),
+    // Default preserves proposals/jobs saved before named lookup was introduced.
+    lookups: AiPlaceLookupsSchema.default([]),
     options: z
       .array(
         z
@@ -218,6 +234,7 @@ export function aiContext(trip: Trip, request: AiRequest, candidates: string[] =
   return {
     day: { id: day.id, date: day.date, timezone: trip.plan.timezone },
     researchNotes: [] as string[],
+    lookupAvailable: false,
     conversation: [] as Array<{
       request: string;
       response: string;

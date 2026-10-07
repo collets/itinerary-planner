@@ -62,8 +62,9 @@ requests, including routing/research. Restart ordinary `pnpm dev` without an
 ## Provider boundaries and limitations
 
 `AiService` is a bounded application orchestrator, not an unrestricted agent loop.
-Stages persist independently: optional research, one structured Responses call,
-up to six logical route requests, then validated proposal construction. Each
+Stages persist independently: optional nearby research, a structured Responses call,
+one optional named-place lookup round and one further Responses call, up to six
+logical route requests, then validated proposal construction. Each
 provider stage has a 40-second timeout under the existing 60-second Vercel Function
 limit. An explicit authenticated POST advances one stage; GET only reads progress.
 No queue, database or new runtime is required for the pilot.
@@ -73,7 +74,7 @@ redirects and bounded bodies. Responses uses strict JSON output, `store:false`,
 no hosted tools and a configured output ceiling including reasoning. Explicit
 `service_tier: default` avoids inheriting a costlier project tier; an unexpected
 returned tier is treated as an unverified charge.
-Every model request sends its persisted job ID as `X-Client-Request-Id` for
+Every model request sends its persisted operation ID as `X-Client-Request-Id` for
 provider-side correlation when a timeout hides the response. Sending only
 a selected day's allowlisted fields excludes traveler identities, booking
 references/notes/payments, tickets, private shared notes and unrelated trips.
@@ -88,10 +89,39 @@ and measures direct versus scenic walking separately from estimated POI dwell
 time. Each logical route uses at most five direction calls. Geometry, streets,
 provider/date and attribution are saved with the approved leg. Manual changes to
 leg duration invalidate its former routing evidence. Transit/flight rerouting,
-GPS location, geocoding and guaranteed optimal routes are not implemented.
+GPS location, general address geocoding and guaranteed optimal routes are not implemented.
 
-Research queries public coordinates through Italian Wikipedia geosearch and
-bounded extracts, at most two HTTP calls and three nearby candidates. Short
+Nearby research queries public coordinates through Italian Wikipedia geosearch and
+bounded extracts, at most two HTTP calls and three nearby candidates. Named
+lookup accepts at most two public landmark names and city/area names from the
+structured model output. The server validates those fields and queries the same
+fixed Wikipedia host, at most two additional HTTP calls and six results. It
+retrieves sourced primary coordinates and short excerpts without requiring the
+user to create a place or enter coordinates. Results without Earth coordinates,
+or more than 25 km from all known trip points, are excluded. The final evidence
+pool is capped at six places/sources; requested places take priority.
+
+This sends public place/city search terms to Wikipedia, in addition to the public
+coordinates used for nearby research. Raw user questions, traveler names, booking
+references, private notes and credentials are not research query fields. Public
+names can be sensitive when entered by a user: do not put private information in
+place names or request a lookup of private accommodation. The model is instructed
+to extract only public landmarks; server validation blocks URL/search operators,
+not every possible semantic disclosure.
+
+A named lookup is persisted before dispatch and can run only once. The second
+model call has a separate durable operation ID and must fit the original request,
+daily and monthly limits, including the settled first charge. Each model pass
+reserves the entire configured context/output bound. An insufficient remainder
+blocks the second pass; there is no automatic retry, budget increase or recursive
+search loop. Older saved outputs default to no lookup; the provider's strict
+schema requires an explicit `lookups` array. Broader time windows such as
+"nel pomeriggio" can produce estimated visit times/durations for review.
+
+Landmark points are not confirmed entrances or postal addresses. Interior access,
+opening hours, tickets and prices remain unknown until separately verified.
+Wikipedia coverage is limited: restaurants, shops and obscure attractions may
+require another evidenced provider in a future change. Short
 excerpts are attributed to Wikipedia contributors under CC BY-SA. Wikipedia is
 secondary evidence; openings, access, prices and suggested pause duration need
 verification. The research note and citations preserve that uncertainty. This

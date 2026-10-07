@@ -62,7 +62,8 @@ const JobSchema = z
       'applying',
       'applied',
     ]),
-    stage: z.enum(['research', 'model', 'routes', 'finalize', 'done']),
+    stage: z.enum(['research', 'model', 'lookup', 'routes', 'finalize', 'done']),
+    lookupRound: z.number().int().min(0).max(1).default(0),
     message: z.string().max(4000),
     owner: z.string().optional(),
     startedAt: z.iso.datetime().optional(),
@@ -501,11 +502,13 @@ export class AiService {
         j.message =
           j.stage === 'research'
             ? 'Cerco luoghi vicini usando solo informazioni pubbliche…'
-            : j.stage === 'model'
-              ? 'Valuto la giornata e gli orari fissi…'
-              : j.stage === 'routes'
-                ? 'Controllo il percorso e i luoghi lungo la strada…'
-                : 'Preparo il confronto con il programma attuale…';
+            : j.stage === 'lookup'
+              ? 'Cerco il luogo richiesto e la sua posizione nelle fonti pubbliche…'
+              : j.stage === 'model'
+                ? 'Valuto la giornata e gli orari fissi…'
+                : j.stage === 'routes'
+                  ? 'Controllo il percorso e i luoghi lungo la strada…'
+                  : 'Preparo il confronto con il programma attuale…';
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) return this.get(tripId, id);
@@ -547,17 +550,34 @@ export class AiService {
           job.discovery.places.map((p) => p.id),
         );
         context.researchNotes = job.discovery.notes;
+        context.lookupAvailable = job.lookupRound === 0 && !!provider.lookup;
         context.conversation = await this.conversation(tripId, job.request, etag);
-        const operation = `${id}-model`;
+        const operation = job.lookupRound ? `${id}-model-1` : `${id}-model`;
         await this.budget.reserve(id, {
           id: operation,
           fingerprint: hash(context),
           maxCost: provider.modelBound(context),
         });
         const raw = await this.budget.dispatch(id, operation, () =>
-          this.bounded((signal) => provider.plan(context, signal, job.id)),
+          this.bounded((signal) => provider.plan(context, signal, operation)),
         );
         const output = AiModelOutputSchema.parse(raw);
+        if (output.lookups.length) {
+          if (!context.lookupAvailable)
+            throw new AiPlanError(
+              'invalid',
+              'La ricerca disponibile è terminata. Specifica il luogo o scegli uno dei risultati trovati.',
+            );
+          if (output.options.length || output.clarification)
+            throw new AiPlanError('invalid', 'La ricerca di un luogo deve precedere la proposta.');
+          await update((j) => {
+            j.output = output;
+            j.stage = 'lookup';
+            j.status = 'planning';
+            j.message = 'Cerco il luogo richiesto nelle fonti pubbliche…';
+          });
+          return this.get(tripId, id);
+        }
         job.output = output;
         const queue = this.collectRoutes(trip, job);
         await update((j) => {
@@ -573,6 +593,48 @@ export class AiService {
           j.message = output.clarification ?? output.message;
         });
         if (output.clarification || !output.options.length) await this.budget.finish(id);
+      } else if (job.stage === 'lookup') {
+        if (job.lookupRound !== 0 || !provider.lookup || !job.output?.lookups.length)
+          throw new AiPlanError('invalid', 'Ricerca non disponibile.');
+        const operation = `${id}-lookup`;
+        await this.budget.reserve(id, {
+          id: operation,
+          fingerprint: hash(job.output.lookups),
+          maxCost: provider.discoveryBound(),
+        });
+        const found = AiDiscoverySchema.parse(
+          await this.budget.dispatch(id, operation, () =>
+            this.bounded((signal) => provider.lookup!(job.output!.lookups, trip, signal)),
+          ),
+        );
+        // Prefer requested landmarks. Preserve already collected evidence for duplicate IDs.
+        const places = [
+          ...found.places.map((p) => job.discovery.places.find((old) => old.id === p.id) ?? p),
+          ...job.discovery.places.filter((p) => !found.places.some((f) => f.id === p.id)),
+        ].slice(0, 6);
+        const sourceIds = new Set(places.flatMap((p) => p.sourceIds));
+        const sources = [
+          ...job.discovery.sources,
+          ...found.sources.filter((s) => !job.discovery.sources.some((old) => old.id === s.id)),
+        ]
+          .filter((s) => sourceIds.has(s.id))
+          .slice(0, 6);
+        const discovery = AiDiscoverySchema.parse({
+          places,
+          sources,
+          notes: [
+            'Ricerca per nome completata. Usa i risultati per proporre la modifica; non chiedere di creare manualmente il luogo.',
+            ...found.notes,
+            ...job.discovery.notes,
+          ].slice(0, 6),
+        });
+        withDiscovery(trip, discovery);
+        await update((j) => {
+          j.discovery = discovery;
+          j.lookupRound = 1;
+          j.stage = 'model';
+          j.status = 'planning';
+        });
       } else if (job.stage === 'routes') {
         const query = job.queue[job.routeIndex];
         const enriched = withDiscovery(trip, job.discovery);

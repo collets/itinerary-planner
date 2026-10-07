@@ -1,4 +1,10 @@
-import type { AiContext, AiModelOutput, AiRoute, AiDiscovery } from '../domain/ai.js';
+import type {
+  AiContext,
+  AiModelOutput,
+  AiRoute,
+  AiDiscovery,
+  AiPlaceLookup,
+} from '../domain/ai.js';
 import { AiPlanError } from '../domain/ai.js';
 import type { Trip } from '../domain/schema.js';
 
@@ -10,6 +16,7 @@ export interface AiProviders {
   plan(context: AiContext, signal: AbortSignal, requestId?: string): Promise<Charged<unknown>>;
   discoveryBound(): number;
   discover(context: AiContext, trip: Trip, signal: AbortSignal): Promise<Charged<AiDiscovery>>;
+  lookup?(queries: AiPlaceLookup[], trip: Trip, signal: AbortSignal): Promise<Charged<AiDiscovery>>;
   routeBound(query: RouteQuery): number;
   validateRoute?(query: RouteQuery, trip: Trip): void;
   route(query: RouteQuery, trip: Trip, signal: AbortSignal): Promise<Charged<AiRoute>>;
@@ -33,7 +40,21 @@ export class MockAiProviders implements AiProviders {
       value: { places: [], sources: [], notes: ['Demo: nessuna ricerca online.'] },
     };
   }
-  async plan(context: AiContext): Promise<Charged<AiModelOutput>> {
+  async lookup(
+    _queries: AiPlaceLookup[],
+    _trip: Trip,
+    _signal: AbortSignal,
+  ): Promise<Charged<AiDiscovery>> {
+    return {
+      actualCost: 0,
+      value: { places: [], sources: [], notes: ['Demo: nessuna ricerca online.'] },
+    };
+  }
+  async plan(
+    context: AiContext,
+    _signal?: AbortSignal,
+    _requestId?: string,
+  ): Promise<Charged<AiModelOutput>> {
     const text = context.request.text.toLocaleLowerCase('it');
     if (/sostitui|alternativ|cambia.*(?:tappa|visita)/.test(text))
       return {
@@ -43,6 +64,7 @@ export class MockAiProviders implements AiProviders {
           clarification:
             'La demo non cerca nuove visite e non calcola nuovi collegamenti. Questa richiesta richiede il servizio AI attivo con percorsi verificati. Puoi intanto provare una modifica degli orari della tappa.',
           options: [],
+          lookups: [],
         },
       };
     const selected =
@@ -106,6 +128,7 @@ export class MockAiProviders implements AiProviders {
       actualCost: 0,
       value: {
         message: 'Modalità dimostrativa: nessuna chiamata AI o ricerca online.',
+        lookups: [],
         clarification: actionable
           ? null
           : 'Indica una tappa e un ritardo in minuti, oppure chiedi di rivedere i percorsi. In questa demo uso soltanto i dati già presenti nel viaggio.',

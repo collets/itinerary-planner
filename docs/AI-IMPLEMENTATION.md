@@ -89,7 +89,7 @@ Provider interfaces:
 First routing candidate is openrouteservice. Its actual account quotas, local
 entrance quality, attribution and offline storage terms must be checked before
 live use. Research is independently budgeted; model memory is not route evidence.
-The implemented research pilot only discovers nearby Wikipedia candidates and
+The implemented research pilot discovers nearby and named Wikipedia candidates and
 labels opening/access information as unknown. General official-source/web lookup
 remains deferred until its request, response and billing bounds are established.
 
@@ -160,8 +160,8 @@ These are maximum allowances, not a target bill or a guaranteed account feature.
    reasoning tokens, hosted tools and routing charges. Unknown prices, unsupported
    billing bounds, exhausted limits or unavailable storage must reject dispatch.
 3. Bound context, conversation history, tool output, model rounds, output tokens,
-   searches, route calls and elapsed time. The implemented pilot uses one model
-   round, two Wikipedia HTTP calls and six logical routes (up to five bounded
+   searches, route calls and elapsed time. The implemented pilot uses at most two model
+   rounds, four Wikipedia HTTP calls (one bounded named lookup round) and six logical routes (up to five bounded
    directions calls per route), with a durable 60-run daily ceiling. Review these
    after measured evaluations.
 4. A typical-cost estimate is not a hard bound. Hosted search may introduce input
