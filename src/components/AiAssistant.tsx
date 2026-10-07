@@ -28,6 +28,8 @@ type SavedAdvice = {
   turns?: Array<{ text: string; job: AiJobView }>;
 };
 const pending = new Set(['queued', 'running', 'planning', 'routing']);
+const informationPrompt =
+  'Cerca e aggiorna orari, prezzi, informazioni e curiosità di questa tappa per la data della visita, citando le fonti.';
 
 export function AiAssistant({
   target,
@@ -41,7 +43,7 @@ export function AiAssistant({
   const { trip, etag, online, refresh, notify, aiMode } = useTrip();
   const [text, setText] = useState(
     target.purpose === 'information'
-      ? 'Cerca e aggiorna orari, prezzi, informazioni e curiosità di questa tappa per la data della visita, citando le fonti.'
+      ? informationPrompt
       : target.draft
         ? 'Suggerisci il percorso migliore e i luoghi lungo la strada dopo questa modifica.'
         : '',
@@ -56,7 +58,7 @@ export function AiAssistant({
   const alive = useRef(true),
     stop = useRef(false),
     activity = useRef(0);
-  const key = `ai:${trip.id}:${target.dayId}:${target.stepId ?? 'day'}:${target.purpose ?? 'adapt'}`;
+  const key = `ai:${trip.id}:${target.dayId}:${target.stepId ?? 'day'}${target.purpose === 'information' ? ':information' : ''}`;
   const endpoint = `/trips/${trip.id}/ai`;
   const selectedStep = trip.plan.steps.find((step) => step.id === target.stepId);
   const protectedStep =
@@ -75,7 +77,7 @@ export function AiAssistant({
         if (cached && !target.draft) {
           setSaved(cached);
           setJob(cached.job);
-          setText(cached.text);
+          setText(cached.text || (target.purpose === 'information' ? informationPrompt : ''));
           setPreference(cached.preference);
           setDraft(cached.draft);
           if (navigator.onLine && cached.request) {

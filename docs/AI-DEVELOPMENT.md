@@ -102,6 +102,11 @@ user to create a place or enter coordinates. Results without Earth coordinates,
 or more than 25 km from all known trip points, are excluded. The final evidence
 pool is capped at six places/sources; requested places take priority.
 
+Nearby suggestions are optional: a free provider or response-contract failure
+returns an empty evidence pool and an uncertainty note, allowing the separate
+named lookup to proceed. It does not retry, invent coordinates, swallow
+cancellation, or alter paid-provider settlement and spending controls.
+
 This sends public place/city search terms to Wikipedia, in addition to the public
 coordinates used for nearby research. Raw user questions, traveler names, booking
 references, private notes and credentials are not research query fields. Public

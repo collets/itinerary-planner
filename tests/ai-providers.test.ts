@@ -422,6 +422,35 @@ describe('bounded routing and secondary-source research', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(withDiscovery(trip, discovery).plan.places).toHaveLength(4);
   });
+  it('continues without optional nearby suggestions on a free contract failure, without retrying or logging values', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetch = vi.fn().mockResolvedValue(json({ error: { info: 'SECRET_PROVIDER_TEXT' } }));
+    vi.stubGlobal('fetch', fetch);
+    const discovery = await provider().discover(
+      context(),
+      locatedTrip(),
+      new AbortController().signal,
+    );
+    expect(discovery.actualCost).toBe(0);
+    expect(discovery.value.places).toEqual([]);
+    expect(discovery.value.sources).toEqual([]);
+    expect(discovery.value.notes[0]).toContain('cercare per nome');
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith('AI nearby discovery unavailable', { category: 'contract' });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+  });
+  it('preserves cancellation instead of falling back to more work', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const error = new Error('Cancelled');
+    const fetch = vi.fn().mockRejectedValue(error);
+    vi.stubGlobal('fetch', fetch);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(provider().discover(context(), locatedTrip(), controller.signal)).rejects.toBe(
+      error,
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+  });
   it('limits the response body and refuses unexpected destinations and redirects', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response('x'.repeat(1000)));
     vi.stubGlobal('fetch', fetch);

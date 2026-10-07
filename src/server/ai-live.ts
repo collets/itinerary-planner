@@ -715,6 +715,33 @@ export class LiveAiProviders implements AiProviders {
     trip: Trip,
     signal: AbortSignal,
   ): Promise<Charged<AiDiscovery>> {
+    try {
+      return await this.discoverNearby(context, trip, signal);
+    } catch (error) {
+      // Nearby suggestions are optional, and this adapter's discovery is free.
+      // Keep named lookup available without retrying or manufacturing evidence.
+      // Cancellation and deadlines still stop the request.
+      if (signal.aborted) throw error;
+      console.warn('AI nearby discovery unavailable', {
+        category: error instanceof z.ZodError ? 'contract' : 'provider',
+      });
+      return {
+        actualCost: 0,
+        value: {
+          places: [],
+          sources: [],
+          notes: [
+            'La ricerca dei luoghi vicini non è disponibile. Puoi cercare per nome il luogo richiesto; non inventare luoghi, coordinate o percorsi.',
+          ],
+        },
+      };
+    }
+  }
+  private async discoverNearby(
+    context: AiContext,
+    trip: Trip,
+    signal: AbortSignal,
+  ): Promise<Charged<AiDiscovery>> {
     // Discovery uses public coordinates, never the user's prompt, names or travel
     // notes as search terms. Wikipedia is a secondary source, not opening-hours proof.
     const known = context.places.flatMap((p) => {
