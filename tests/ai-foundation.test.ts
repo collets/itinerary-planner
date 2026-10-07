@@ -601,6 +601,46 @@ describe('Phase 0–2 conversation contracts (scripted providers, not language-q
       remainingMinutes: 135,
     });
   });
+  it('keeps saved research citations distinct and usable in subsequent schedule proposals', async () => {
+    const original = await trips.read('example-trip');
+    await trips.mutate('example-trip', original.etag, (trip) => {
+      trip.plan.places[0].information = information();
+      trip.plan.places.find((p) => p.id === 'blue-museum')!.information = {
+        ...information(),
+        website: { url: 'https://other.example/', sourceIds: ['official'] },
+        sources: [{ ...information().sources[0], url: 'https://other.example/' }],
+      };
+    });
+    vi.spyOn(provider, 'plan').mockImplementation(async (context: AiContext) => {
+      const place = context.places.find((p) => p.id === 'blue-museum')!;
+      const id = place.visitInformation!.sources[0].id;
+      expect(context.sources.find((s) => s.id === id)?.url).toBe('https://other.example/');
+      expect(new Set(context.sources.map((s) => s.id)).size).toBe(context.sources.length);
+      expect(place.visitInformation!.price!.sourceIds).toEqual([id]);
+      return {
+        value: reply({ task: task(['propose']), options: [{ ...option(), sourceIds: [id] }] }),
+        actualCost: 0,
+      };
+    });
+    const { job } = await run('cached-citation', 'Accorcia la visita');
+    expect(job.status, job.message).toBe('ready');
+    expect(job.proposals[0].citations.some((s) => s.url === 'https://other.example/')).toBe(true);
+  });
+  it.each(['1700-11-12T17:00:00+01:00', '2026-11-12T23:30:00Z'])(
+    'rejects a deadline outside the selected local day (%s)',
+    async (finishBy) => {
+      const t = task(['propose']);
+      t.constraints.finishBy = finishBy;
+      vi.spyOn(provider, 'plan').mockResolvedValue({
+        value: reply({ task: t, options: [option()] }),
+        actualCost: 0,
+      });
+      const { job, original } = await run('wrong-date', 'Accorcia la visita');
+      expect(job.status).toBe('failed');
+      expect(job.message).toContain('giornata selezionata');
+      expect((await trips.read('example-trip')).etag).toBe(original.etag);
+    },
+  );
 
   it('keeps task constraints across a brief follow-up without replaying a stale proposal', async () => {
     const t = task(['propose']);

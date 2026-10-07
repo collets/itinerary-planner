@@ -477,6 +477,23 @@ export class AiService {
   private validateTask(task: AiTask, context: AiContext) {
     const steps = new Set(context.steps.map((s) => s.id));
     const places = new Set(context.places.map((p) => p.id));
+    const dayDate = new Intl.DateTimeFormat('en-CA', {
+      timeZone: context.day.timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    if (
+      [
+        task.constraints.finishBy,
+        task.constraints.visitNotBefore,
+        task.constraints.visitNotAfter,
+      ].some((instant) => instant && dayDate.format(new Date(instant)) !== context.day.date)
+    )
+      throw new AiPlanError(
+        'invalid',
+        'Il vincolo di orario deve appartenere alla giornata selezionata.',
+      );
     if (
       [...task.targetStepIds, ...task.constraints.keepStepIds].some((id) => !steps.has(id)) ||
       [...task.constraints.avoidPlaceIds, ...task.constraints.requireOpenPlaceIds].some(

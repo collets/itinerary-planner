@@ -351,6 +351,38 @@ describe('OpenAI Responses adapter contracts', () => {
     );
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+  it('constrains generated dates and citations to the selected day without mutating the shared schema', () => {
+    const input = context();
+    input.sources.push({
+      id: 'synthetic-source',
+      title: 'Fonte sintetica',
+      description: '',
+      status: 'verified_official',
+      verifiedOn: null,
+      url: 'https://museum.example/',
+    });
+    const schema = JSON.parse(JSON.stringify(modelSchemaFor(input)));
+    const constraints = schema.properties.task.properties.constraints.properties;
+    const datePattern = constraints.finishBy.anyOf.find(
+      (s: { type: string }) => s.type === 'string',
+    ).pattern;
+    expect(new RegExp(datePattern).test(`${input.day.date}T17:00:00+01:00`)).toBe(true);
+    expect(new RegExp(datePattern).test('1700-11-12T17:00:00+01:00')).toBe(false);
+    const option = schema.properties.options.items.properties;
+    expect(option.sourceIds.items.enum).toEqual(input.sources.map((s) => s.id));
+    expect(option.actions.items.properties.stepId.anyOf[0].enum).toEqual(
+      input.steps.map((s) => s.id),
+    );
+    expect(schema.properties.task.properties.targetStepIds.items.enum).toEqual(
+      input.steps.map((s) => s.id),
+    );
+    input.sources = [];
+    expect(
+      JSON.parse(JSON.stringify(modelSchemaFor(input))).properties.options.items.properties
+        .sourceIds.maxItems,
+    ).toBe(0);
+    expect(JSON.stringify(modelJsonSchema)).not.toContain(`^${input.day.date}T`);
+  });
   it('rejects oversized context and stale pricing before dispatch', async () => {
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);

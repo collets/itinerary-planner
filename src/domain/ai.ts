@@ -277,6 +277,48 @@ export function aiContext(
       { min: row.min, max: row.max, unknown: row.unknown, euro: row.euro },
     ]),
   );
+  // Research IDs are local to each place overlay. Expose distinct context IDs
+  // so two venues' "official" sources cannot alias each other or baseline data.
+  const researchIds = new Map<string, Map<string, string>>();
+  const citedSources = trip.plan.sources
+    .filter((s) => sources.has(s.id) && s.status !== 'user_provided')
+    .slice(0, 30)
+    .map((s) => ({
+      id: s.id,
+      title: text(s.title, 160),
+      description: text(s.description),
+      status: s.status,
+      verifiedOn: s.verifiedOn ?? null,
+      url: publicUrl(s.url),
+    }));
+  const usedSourceIds = new Set(citedSources.map((s) => s.id));
+  for (const [placeIndex, p] of places.entries()) {
+    if (!p.information) continue;
+    const aliases = new Map<string, string>();
+    for (const [sourceIndex, s] of p.information.sources.entries()) {
+      let id = `research-${placeIndex}-${sourceIndex}`;
+      let collision = 0;
+      while (usedSourceIds.has(id)) id = `research-${placeIndex}-${sourceIndex}-${++collision}`;
+      usedSourceIds.add(id);
+      aliases.set(s.id, id);
+      citedSources.push({
+        id,
+        title: text(s.title, 160),
+        url: publicUrl(s.url),
+        description: `Ricerca per ${p.information.visitDate}, consultata il ${p.information.checkedAt}.`,
+        verifiedOn: p.information.checkedAt.slice(0, 10),
+        status: s.kind === 'official' ? 'verified_official' : 'verified_secondary',
+      });
+    }
+    researchIds.set(p.id, aliases);
+  }
+  const researchFact = <T extends { sourceIds: string[] }>(
+    placeId: string,
+    fact: T | null | undefined,
+  ) =>
+    fact
+      ? { ...fact, sourceIds: fact.sourceIds.map((id) => researchIds.get(placeId)!.get(id)!) }
+      : null;
   return {
     day: {
       id: day.id,
@@ -372,24 +414,41 @@ export function aiContext(
             visitDate: p.information.visitDate,
             checkedAt: p.information.checkedAt,
             description: p.information.description
-              ? { ...p.information.description, text: text(p.information.description.text) }
+              ? {
+                  ...researchFact(p.id, p.information.description),
+                  text: text(p.information.description.text),
+                }
               : null,
             details: p.information.details
-              ? { ...p.information.details, text: text(p.information.details.text) }
+              ? {
+                  ...researchFact(p.id, p.information.details),
+                  text: text(p.information.details.text),
+                }
               : null,
             trivia: p.information.trivia
-              ? { ...p.information.trivia, text: text(p.information.trivia.text) }
+              ? {
+                  ...researchFact(p.id, p.information.trivia),
+                  text: text(p.information.trivia.text),
+                }
               : null,
             entrance: p.information.entrance
-              ? { ...p.information.entrance, text: text(p.information.entrance.text) }
+              ? {
+                  ...researchFact(p.id, p.information.entrance),
+                  text: text(p.information.entrance.text),
+                }
               : null,
-            price: p.information.price,
-            sources: p.information.sources.map((s) => ({ ...s, url: publicUrl(s.url) })),
+            price: researchFact(p.id, p.information.price),
+            sources: p.information.sources.map((s) => ({
+              ...s,
+              id: researchIds.get(p.id)!.get(s.id)!,
+              url: publicUrl(s.url),
+            })),
             openingHours: p.information.openingHours
               ? {
                   text: text(p.information.openingHours.text, 800),
                   visitStatus: p.information.openingHours.visitStatus,
                   windows: p.information.openingHours.windows,
+                  sourceIds: researchFact(p.id, p.information.openingHours)!.sourceIds,
                 }
               : null,
             warnings: p.information.warnings.slice(0, 3).map((v) => text(v, 300)),
@@ -397,17 +456,7 @@ export function aiContext(
         : null,
       sourceIds: p.sourceIds.slice(0, 10),
     })),
-    sources: trip.plan.sources
-      .filter((s) => sources.has(s.id) && s.status !== 'user_provided')
-      .slice(0, 30)
-      .map((s) => ({
-        id: s.id,
-        title: text(s.title, 160),
-        description: text(s.description),
-        status: s.status,
-        verifiedOn: s.verifiedOn ?? null,
-        url: publicUrl(s.url),
-      })),
+    sources: citedSources,
   };
 }
 export type AiContext = ReturnType<typeof aiContext>;

@@ -58,7 +58,7 @@ For replacing an unprotected stop, propose skip of the chosen stop followed by a
 Walking routes are requests for the server's routing tool, not estimates made by you. A route connects consecutive remaining stops; select at most three candidate POIs.
 If the user wants scenic walking, suggest relevant public places in the supplied context. Mention unknown opening/entrance access and time needed for pauses.
 Prefer fewer changes, and request clarification if the request is ambiguous or cannot be safely satisfied. Never fabricate a workable schedule around a protected slot.
-Use sourceIds only from the supplied sources. No arbitrary URLs or searches beyond the bounded named lookup. Explain why the option is useful, without claiming it is the objectively best route.`;
+Use option.sourceIds only from the top-level context.sources list, including its scoped research IDs. Dates and time constraints use day.date, never the current date or an inferred year. No arbitrary URLs or searches beyond the bounded named lookup. Explain why the option is useful, without claiming it is the objectively best route.`;
 // Responses strict format requires lookups even though persisted old jobs default it.
 // Keep JS Unicode regexp syntax out of the provider schema. The domain schema
 // still validates names before any lookup dispatch; generation isn't validation.
@@ -118,6 +118,63 @@ export function modelSchemaFor(context: AiContext) {
   const locations = schema.properties!.locationRequests as Record<string, unknown>;
   if (!context.candidatePlaceIds.length || context.request.purpose === 'information')
     locations.maxItems = 0;
+  type Node = {
+    type?: string;
+    enum?: string[];
+    maxItems?: number;
+    pattern?: string;
+    properties?: Record<string, Node>;
+    items?: Node;
+    anyOf?: Node[];
+  };
+  const root = schema as Node;
+  const idsFor = (field: Node, ids: string[]) => {
+    if (!ids.length) {
+      field.maxItems = 0;
+      return;
+    }
+    field.items = { type: 'string', enum: ids };
+  };
+  const nullableIds = (field: Node, ids: string[]) => {
+    field.anyOf = ids.length
+      ? [{ type: 'string', enum: ids }, { type: 'null' }]
+      : [{ type: 'null' }];
+  };
+  const steps = context.steps.map((s) => s.id);
+  const places = context.places.map((p) => p.id);
+  const task = root.properties!.task.properties!;
+  idsFor(task.targetStepIds, steps);
+  const constraints = task.constraints.properties!;
+  idsFor(constraints.keepStepIds, steps);
+  idsFor(constraints.avoidPlaceIds, places);
+  idsFor(constraints.requireOpenPlaceIds, places);
+  const sameDay = (field: Node) => {
+    const date = field.anyOf!.find((s) => s.type === 'string')!;
+    // This release only edits the selected day. Domain validation still checks
+    // actual instants/timezone; the schema prevents accidental year/date drift.
+    date.pattern = `^${context.day.date}T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$`;
+  };
+  for (const key of ['finishBy', 'visitNotBefore', 'visitNotAfter']) sameDay(constraints[key]);
+  const choice = task.pendingQuestion.anyOf!.find((s) => s.type === 'object')!.properties!.choices
+    .items!.properties!;
+  nullableIds(choice.stepId, steps);
+  nullableIds(choice.placeId, places);
+  const option = root.properties!.options.items!.properties!;
+  idsFor(
+    option.sourceIds,
+    context.sources.map((s) => s.id),
+  );
+  const action = option.actions.items!.properties!;
+  nullableIds(action.stepId, steps);
+  nullableIds(action.afterId, steps);
+  nullableIds(action.placeId, places);
+  sameDay(action.start);
+  const route = option.routes.items!.properties!;
+  if (places.length) {
+    route.fromPlaceId.enum = places;
+    route.toPlaceId.enum = places;
+  } else option.routes.maxItems = 0;
+  idsFor(route.poiPlaceIds, places);
   return schema;
 }
 
