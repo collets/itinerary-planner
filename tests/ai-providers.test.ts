@@ -439,6 +439,80 @@ describe('bounded routing and secondary-source research', () => {
   });
 });
 describe('private provider failure diagnostics', () => {
+  it('captures only allowlisted OpenAI error metadata and a validated request ID', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const requestId = 'req_' + 'a'.repeat(32);
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'invalid_json_schema',
+            param: 'text.format.schema',
+            message: 'SECRET private question and credential echoed here',
+          },
+        }),
+        { status: 400, headers: { 'x-request-id': requestId } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetch);
+    await expect(
+      providerJson(
+        'https://api.openai.com/v1/responses',
+        {
+          headers: { Authorization: 'SECRET credential' },
+          body: 'SECRET prompt',
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('Provider rejected request');
+    expect(warn).toHaveBeenCalledWith('AI provider failure', {
+      provider: 'api.openai.com',
+      category: 'http',
+      status: 400,
+      code: 'invalid_json_schema',
+      param: 'text.format.schema',
+      requestId,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  it('omits arbitrary or oversized OpenAI error data without retrying or exposing it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'SECRET',
+              param: 'SECRET',
+              message: 'SECRET',
+            },
+          }),
+          { status: 400, headers: { 'x-request-id': 'SECRET' } },
+        ),
+      )
+      .mockResolvedValueOnce(new Response('SECRET'.repeat(2000), { status: 400 }));
+    vi.stubGlobal('fetch', fetch);
+    for (let i = 0; i < 2; i++)
+      await expect(
+        providerJson('https://api.openai.com/v1/responses', {}, new AbortController().signal),
+      ).rejects.toThrow('Provider rejected request');
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(
+      warn.mock.calls.every(
+        ([, value]) =>
+          JSON.stringify(value) ===
+          JSON.stringify({
+            provider: 'api.openai.com',
+            category: 'http',
+            status: 400,
+          }),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
   it('reports failure categories without disclosing credentials, URLs or error bodies', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const fetch = vi

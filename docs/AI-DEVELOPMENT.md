@@ -136,7 +136,10 @@ proved and reserved. No model-selected URL is fetched.
 
 Provider failures log only the allowlisted host, a fixed category and (for HTTP
 rejections) the status code. Routing response contract failures use a fixed
-category. Headers, request URLs, payloads, provider error bodies and exception
+category. OpenAI rejections can additionally log an allowlisted error code,
+an allowlisted parameter name and a validated `req_` correlation ID. Error bodies
+are read with an 8 KB ceiling; unknown metadata and all error messages are omitted.
+Other headers, request URLs, payloads, provider error bodies and exception
 messages are omitted. Diagnostics do not change dispatch ownership, settlement
 or the prohibition on automatic provider retries.
 

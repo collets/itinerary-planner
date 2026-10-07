@@ -87,13 +87,54 @@ export async function providerJson(
     throw error;
   }
   if (!response.ok) {
+    // Restrict diagnostics to fixed public error metadata. Never log provider
+    // messages: they may echo private request fields or credentials.
+    const diagnostic: Record<string, string> = {};
+    if (parsed.hostname === 'api.openai.com') {
+      const requestId = response.headers.get('x-request-id');
+      if (requestId && /^req_[a-f0-9]{32}$/.test(requestId)) diagnostic.requestId = requestId;
+      try {
+        const body = z
+          .object({ error: z.object({ code: z.unknown(), param: z.unknown() }) })
+          .parse(JSON.parse(await boundedProviderBody(response, 8000)));
+        if (
+          [
+            'invalid_json_schema',
+            'model_not_found',
+            'unsupported_parameter',
+            'invalid_api_key',
+            'insufficient_quota',
+          ].includes(String(body.error.code))
+        )
+          diagnostic.code = String(body.error.code);
+        if (
+          [
+            'text.format.schema',
+            'text.format',
+            'model',
+            'reasoning.effort',
+            'max_output_tokens',
+            'service_tier',
+            'tools',
+          ].includes(String(body.error.param))
+        )
+          diagnostic.param = String(body.error.param);
+      } catch {
+        /* Missing, oversized or unrecognized diagnostics are not logged. */
+      }
+    }
     console.warn('AI provider failure', {
       provider: parsed.hostname,
       category: 'http',
       status: response.status,
+      ...diagnostic,
     });
     throw new Error('Provider rejected request');
   }
+  return JSON.parse(await boundedProviderBody(response, maximum));
+}
+
+async function boundedProviderBody(response: Response, maximum: number) {
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Provider response missing');
   const chunks: Uint8Array[] = [];
@@ -118,7 +159,7 @@ export async function providerJson(
     bytes.set(chunk, offset);
     offset += chunk.length;
   }
-  return JSON.parse(new TextDecoder().decode(bytes));
+  return new TextDecoder().decode(bytes);
 }
 
 const responseSchema = z.object({
