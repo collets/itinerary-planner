@@ -164,6 +164,11 @@ function canonical(value: unknown): string {
   return JSON.stringify(sort(value));
 }
 export function fingerprint(trip: Trip, key: string): string {
+  if (key.startsWith('information:')) {
+    const place = trip.plan.places.find((p) => p.id === key.slice(12));
+    if (!place) throw new TravelError('conflict', 'Il luogo non è più disponibile.');
+    return canonical(place.information ?? null);
+  }
   if (key.startsWith('note:')) {
     const id = key.slice(5);
     if (!trip.plan.days.some((d) => d.id === id) && !trip.plan.steps.some((s) => s.id === id))
@@ -403,6 +408,14 @@ function restoreSnapshot(
   keys: string[],
 ) {
   for (const key of keys) {
+    if (key.startsWith('information:')) {
+      const place = trip.plan.places.find((p) => p.id === key.slice(12));
+      if (!place) throw new TravelError('conflict', 'Il luogo non è più disponibile.');
+      const saved = before.plan.places.find((p) => p.id === place.id)?.information;
+      if (saved) place.information = structuredClone(saved);
+      else delete place.information;
+      continue;
+    }
     if (key.startsWith('note:')) {
       const id = key.slice(5);
       if (before.notes[id]) trip.travel!.notes[id] = before.notes[id];

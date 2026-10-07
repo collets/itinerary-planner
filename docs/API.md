@@ -77,18 +77,20 @@ The command body is `{id, action, routes, expected, at}`. `id` is a unique stabl
 or `live`. AI is disabled unless both provider configuration and the independent
 durable ledger allow it. Existing browser sessions/agent tokens can use:
 
-| Method | Path under `/api/v2/trips/{id}/ai` | Behavior                                                                                         |
-| ------ | ---------------------------------- | ------------------------------------------------------------------------------------------------ |
-| POST   | `/requests`                        | `{id, dayId, stepId?, parentJobId?, text, preference?, draft?}`; current X-Trip-Version required |
-| GET    | `/requests/{jobId}`                | Status, Italian message and validated proposals; read only                                       |
-| POST   | `/requests/{jobId}/advance`        | One claimed/reserved stage; `{}` body; no automatic provider retries                             |
-| POST   | `/requests/{jobId}/cancel`         | Stop future work; dispatched liabilities remain held                                             |
-| POST   | `/proposals/{proposalId}/apply`    | `{previewHash}` plus current X-Trip-Version; exact proposal approval and one atomic write        |
+| Method | Path under `/api/v2/trips/{id}/ai` | Behavior                                                                                                   |
+| ------ | ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| POST   | `/requests`                        | `{id, dayId, stepId?, parentJobId?, text, preference?, purpose?, draft?}`; current X-Trip-Version required |
+| GET    | `/requests/{jobId}`                | Status, Italian message and validated proposals; read only                                                 |
+| POST   | `/requests/{jobId}/advance`        | One claimed/reserved stage; `{}` body; no automatic provider retries                                       |
+| POST   | `/requests/{jobId}/cancel`         | Stop future work; dispatched liabilities remain held                                                       |
+| POST   | `/proposals/{proposalId}/apply`    | `{previewHash}` plus current X-Trip-Version; exact proposal approval and one atomic write                  |
 
 Use a stable unique request ID for network retries. Create is idempotent only for
 the same payload, trip and original version; different payloads with the same ID
 return 409. `preference` is `fastest` (default) or `scenic`. The text is 1–2,000
-characters; a parent job must belong to the same trip/day and be terminal. Draft
+characters. `purpose` is `adapt` (default) or `information`; information requests
+require a selected public visit/meal stop, verified coordinates, configured web
+research and no draft. A parent job must belong to the same trip/day and be terminal. Draft
 is a validated TravelCommand, not a saved itinerary edit. Only flexible same-day
 delay/timing/skip/move/add drafts are accepted; lock, restore, undo, shared notes,
 actual-departure overrides and booking acknowledgments cannot enter this API.
@@ -97,7 +99,7 @@ spends money. Unknown charges return an uncertain status requiring operator
 verification; polling or lease expiry cannot trigger a repeat dispatch.
 
 Proposal objects contain stable IDs, base version, 30-minute expiry, a preview
-hash, typed commands, optional discovered catalog entries, route evidence and
+hash, typed commands, optional discovered catalog entries, dated field-level information overlays, route evidence and
 citations. Inspect them in the job response. Apply rejects modified/stale/expired
 proposals and revalidates all protected anchors. Repeated apply returns the
 current committed trip even if the original version is stale. V1 access returns

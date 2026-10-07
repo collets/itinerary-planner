@@ -168,3 +168,31 @@ Supported action shapes (all IDs refer to existing catalog/day records unless ad
 Omitting `afterId` inserts at the beginning. A modified connection requires `routes: [{fromPlaceId,toPlaceId,mode,durationMinutes}]`, with mode `walk`, `transit`, `taxi`, or `train`. These are explicit provisional estimates. Generated routes contain no copied streets, POIs, coordinates, or source claims. Matching authored connections can be reused. Opening Maps still requires connectivity.
 
 Delays preserve durations and absorb existing gaps before moving later activities. Fixed and completed activities cannot shift. Invalid overlaps, midnight crossings, or insufficient space before an anchor produce an error, with no partial write. Restore preserves notes, completed visits, reservations, payments and files; it can require route estimates for visits moved into another day. Undo is permitted only while the relevant day/note still matches its recorded after state. Original budget estimates remain labelled as such; a skipped visit does not imply a refund, and newly added stops have unknown cost.
+
+## AI researched place information
+
+`plan.places[].information` optionally stores a dated, approved research overlay.
+Existing manual fields remain intact. `checkedAt` is the consultation timestamp;
+`visitDate` is the specific local date researched. Text fields (`description`,
+`details`, `trivia`, `entrance`) and links (`website`, `bookingUrl`) are nullable;
+each present field references its own `sourceIds` in the overlay's `sources`.
+Sources have stable local IDs, HTTPS URLs, titles and a researched `kind`
+(`official` or `secondary`). This classification is an AI assessment, not a
+human guarantee. These source IDs are local to the information object, rather
+than references to `plan.sources`.
+
+`openingHours` contains sourced text, `visitStatus` (`open`, `closed`, `unknown`)
+and at most three local `opens`/`closes` intervals. Only use intervals explicitly
+applicable to `visitDate`; otherwise use unknown with an empty window list.
+`price` identifies the ticket/exhibition, min/max, ISO currency and person/group
+basis. Practical facts require official evidence; unknown facts are null, with
+warnings. These are advisory prices, not original cost estimates, payments or
+reservations. Euro estimates reuse the trip's dated exchange rates.
+
+AI proposals carry a bounded `information` array of `{placeId, information}`.
+Applying it uses the same authenticated ETag/preview approval and atomic history
+entry as itinerary edits. Undo restores only the information overlay of affected
+places and respects intervening edits; it does not roll back financial history.
+Research caches are private server data, expire for reuse after 24 hours, and
+are scoped to the public name/coordinates and exact visit date. Never place
+personal names, accommodation or credentials in public research fields.

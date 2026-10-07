@@ -176,6 +176,9 @@ export function TripShell() {
     const currencies = [
       ...new Set([
         ...trip.plan.costs.map((c) => c.currency),
+        ...trip.plan.places.flatMap((p) =>
+          p.information?.price ? [p.information.price.currency] : [],
+        ),
         ...trip.state.reservations.flatMap((r) => (r.currency ? [r.currency] : [])),
       ]),
     ].filter((c) => c !== 'EUR');
@@ -383,7 +386,7 @@ export function TripShell() {
       {editor && <TravelEditor target={editor} onClose={() => setEditor(null)} />}
       {assistant && (
         <AiAssistant
-          key={`${trip.id}:${assistant.dayId}:${assistant.stepId ?? ''}:${assistant.draft?.id ?? ''}`}
+          key={`${trip.id}:${assistant.dayId}:${assistant.stepId ?? ''}:${assistant.draft?.id ?? ''}:${assistant.purpose ?? 'adapt'}`}
           target={assistant}
           onTarget={setAssistant}
           onClose={() => setAssistant(null)}

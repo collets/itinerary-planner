@@ -6,10 +6,17 @@ import { db, journal, saveAiAdvice } from '../client/db';
 import { projectAiProposal, type AiRequest, type AiProposal } from '../domain/ai';
 import type { TravelCommand } from '../domain/travel';
 import type { AiJobView } from '../server/ai';
+import { PlaceInformation } from './PlaceInformation';
 import { Modal } from './Modal';
 import { SchedulePreview } from './TravelEditor';
 
-export type AiTarget = { dayId: string; stepId?: string; draft?: TravelCommand; generic?: boolean };
+export type AiTarget = {
+  dayId: string;
+  stepId?: string;
+  draft?: TravelCommand;
+  generic?: boolean;
+  purpose?: 'information' | 'adapt';
+};
 type SavedAdvice = {
   text: string;
   preference: 'fastest' | 'scenic';
@@ -33,9 +40,11 @@ export function AiAssistant({
 }) {
   const { trip, etag, online, refresh, notify, aiMode } = useTrip();
   const [text, setText] = useState(
-    target.draft
-      ? 'Suggerisci il percorso migliore e i luoghi lungo la strada dopo questa modifica.'
-      : '',
+    target.purpose === 'information'
+      ? 'Cerca e aggiorna orari, prezzi, informazioni e curiosità di questa tappa per la data della visita, citando le fonti.'
+      : target.draft
+        ? 'Suggerisci il percorso migliore e i luoghi lungo la strada dopo questa modifica.'
+        : '',
   );
   const [draft, setDraft] = useState(target.draft);
   const [preference, setPreference] = useState<'fastest' | 'scenic'>('fastest');
@@ -47,7 +56,7 @@ export function AiAssistant({
   const alive = useRef(true),
     stop = useRef(false),
     activity = useRef(0);
-  const key = `ai:${trip.id}:${target.dayId}:${target.stepId ?? 'day'}`;
+  const key = `ai:${trip.id}:${target.dayId}:${target.stepId ?? 'day'}:${target.purpose ?? 'adapt'}`;
   const endpoint = `/trips/${trip.id}/ai`;
   const selectedStep = trip.plan.steps.find((step) => step.id === target.stepId);
   const protectedStep =
@@ -177,6 +186,7 @@ export function AiAssistant({
             ...(target.stepId ? { stepId: target.stepId } : {}),
             text,
             preference,
+            purpose: target.purpose ?? 'adapt',
             ...(draft ? { draft } : {}),
           },
           baseEtag: fresh.etag,
@@ -280,6 +290,21 @@ export function AiAssistant({
           </div>
           <section className="ai-context-widget" aria-label="Contesto della conversazione">
             <strong>{trip.plan.title}</strong>
+            {target.purpose === 'information' && (
+              <p className="small">
+                Questa richiesta aggiorna le informazioni del luogo, mantenendo gli orari del
+                programma.{' '}
+                <button
+                  className="text-link"
+                  disabled={busy || (!!job && pending.has(job.status))}
+                  onClick={() =>
+                    onTarget({ dayId: target.dayId, stepId: target.stepId, purpose: 'adapt' })
+                  }
+                >
+                  Torna alle modifiche del programma
+                </button>
+              </p>
+            )}
             <label>
               Giornata
               <select
@@ -328,9 +353,25 @@ export function AiAssistant({
             )}
             {selectedStep?.kind === 'stop' && (
               <div className="ai-stop-shortcuts" aria-label="Idee per questa tappa">
+                {['visit', 'meal'].includes(selectedStep.category) && (
+                  <button
+                    className="button subtle"
+                    disabled={!loaded || busy || !!draft || (!!job && pending.has(job.status))}
+                    onClick={() =>
+                      onTarget({
+                        dayId: target.dayId,
+                        stepId: selectedStep.id,
+                        purpose: 'information',
+                      })
+                    }
+                  >
+                    Aggiorna informazioni con AI
+                  </button>
+                )}
                 <button
                   className="button subtle"
                   disabled={
+                    target.purpose === 'information' ||
                     !loaded ||
                     busy ||
                     !!draft ||
@@ -348,6 +389,7 @@ export function AiAssistant({
                 <button
                   className="button subtle"
                   disabled={
+                    target.purpose === 'information' ||
                     !loaded ||
                     busy ||
                     !!draft ||
@@ -551,6 +593,15 @@ function Proposal({
           Il programma è cambiato. Genera una nuova proposta per confrontare gli orari aggiornati.
         </p>
       )}
+      {(proposal.information ?? []).map((update) => (
+        <section className="ai-route" key={update.placeId}>
+          <h4>
+            {[...trip.plan.places, ...proposal.places].find((p) => p.id === update.placeId)?.name} ·
+            informazioni proposte
+          </h4>
+          <PlaceInformation information={update.information} />
+        </section>
+      ))}
       {proposal.routes.map((route, i) => (
         <section className="ai-route" key={i}>
           <h4>

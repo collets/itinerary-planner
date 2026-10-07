@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PlaceInformationSchema } from './place-information.js';
 
 export const Id = z
   .string()
@@ -50,6 +51,7 @@ export const PlaceSchema = z
     trivia: z.string().max(20000).default(''),
     entrance: z.string().max(20000).default(''),
     openingHours: z.string().max(20000).default(''),
+    information: PlaceInformationSchema.optional(),
     website: SafeUrl.optional(),
     bookingUrl: SafeUrl.optional(),
     phone: z.string().max(20000).optional(),

@@ -6,6 +6,8 @@ import type {
   AiPlaceLookup,
 } from '../domain/ai.js';
 import { AiPlanError } from '../domain/ai.js';
+import type { PlaceInformation } from '../domain/place-information.js';
+import type { EnrichmentQuery } from './ai-enrichment.js';
 import type { Trip } from '../domain/schema.js';
 
 export type RouteQuery = { fromPlaceId: string; toPlaceId: string; poiPlaceIds: string[] };
@@ -14,6 +16,13 @@ export interface AiProviders {
   mode: 'mock' | 'live';
   modelBound(context: AiContext): number;
   plan(context: AiContext, signal: AbortSignal, requestId?: string): Promise<Charged<unknown>>;
+  informationAvailable?: boolean;
+  enrichmentBound?(): number;
+  enrich?(
+    query: EnrichmentQuery,
+    signal: AbortSignal,
+    requestId: string,
+  ): Promise<Charged<PlaceInformation | null>>;
   discoveryBound(): number;
   discover(context: AiContext, trip: Trip, signal: AbortSignal): Promise<Charged<AiDiscovery>>;
   lookup?(queries: AiPlaceLookup[], trip: Trip, signal: AbortSignal): Promise<Charged<AiDiscovery>>;

@@ -30,6 +30,7 @@ import {
 import type { Step } from '../domain/schema';
 import { archivedSteps } from '../domain/travel';
 import { ViewSwitch } from './Overview';
+import { PlaceInformation } from './PlaceInformation';
 import { EuroEstimate } from './EuroEstimate';
 
 export function SourceList({ ids }: { ids: string[] }) {
@@ -216,6 +217,19 @@ export function Details() {
               : 'Chiedi aiuto per questo percorso'}
           </button>
         )}
+        {!archived &&
+          aiAvailable &&
+          step.kind === 'stop' &&
+          ['visit', 'meal'].includes(step.category) && (
+            <button
+              className="button subtle full adapt-button"
+              onClick={() => askAi({ dayId: day.id, stepId: step.id, purpose: 'information' })}
+            >
+              <Sparkles size={17} />
+              Aggiorna informazioni con AI
+            </button>
+          )}
+        {place?.information && <PlaceInformation information={place.information} />}
         {trip.travel?.notes[step.id] && <p className="travel-note">{trip.travel.notes[step.id]}</p>}
         {!costs.length &&
           trip.travel &&

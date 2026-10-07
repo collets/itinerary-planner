@@ -1,5 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import {
+  PlaceInformationSchema,
+  informationFresh,
+  visitWindowStatus,
+  type PlaceInformationUpdate,
+} from '../domain/place-information.js';
+import { validateResearchQuery, type EnrichmentQuery } from './ai-enrichment.js';
 import { Id, type Trip } from '../domain/schema.js';
 import {
   AiRequestSchema,
@@ -62,7 +69,14 @@ const JobSchema = z
       'applying',
       'applied',
     ]),
-    stage: z.enum(['research', 'model', 'lookup', 'routes', 'finalize', 'done']),
+    stage: z.enum(['research', 'model', 'lookup', 'information', 'routes', 'finalize', 'done']),
+    informationRound: z.number().int().min(0).max(1).default(0),
+    informationQueue: z.array(Id).max(2).default([]),
+    informationIndex: z.number().int().min(0).max(2).default(0),
+    information: z
+      .array(z.object({ placeId: Id, information: PlaceInformationSchema }).strict())
+      .max(2)
+      .default([]),
     lookupRound: z.number().int().min(0).max(1).default(0),
     message: z.string().max(4000),
     owner: z.string().optional(),
@@ -224,6 +238,17 @@ export class AiService {
         throw new ApiError(409, 'ID della richiesta già utilizzato per un’altra modifica.');
       return this.get(tripId, request.id);
     }
+    if (
+      request.stepId &&
+      !request.draft &&
+      /(?:cerca|verifica|controlla|aggiorna|racconta|dimmi).*(?:orari|apertur|prezz|curios|trivia|informazioni)/i.test(
+        request.text,
+      ) &&
+      !/aggiung|sostitui|spost|ritard|anticip|posticip|accorci|cambia|modifica|salta/i.test(
+        request.text,
+      )
+    )
+      request.purpose = 'information';
     const provider = this.provider();
     const { trip, etag } = await this.trips.read(tripId);
     if (etag !== expected)
@@ -231,6 +256,21 @@ export class AiService {
     const draft = request.draft ? applyTravel(trip, request.draft) : trip;
     const context = aiContext(draft, request);
     context.conversation = await this.conversation(tripId, request, etag);
+    if (request.purpose === 'information') {
+      const step = draft.plan.steps.find((s) => s.id === request.stepId);
+      if (request.draft || step?.kind !== 'stop' || !['visit', 'meal'].includes(step.category))
+        throw new AiPlanError(
+          'invalid',
+          'Scegli una visita o un locale pubblico per aggiornare le informazioni.',
+        );
+      if (!provider.informationAvailable || !provider.enrich || !provider.enrichmentBound)
+        throw new ApiError(
+          503,
+          'La ricerca delle informazioni richiede il servizio AI con ricerca web attiva.',
+        );
+      this.researchQuery(draft, step.placeId, request.dayId);
+      provider.enrichmentBound();
+    }
     provider.modelBound(context); // Pricing and input caps fail before starting a job.
     const timestamp = new Date(this.now()).toISOString();
     const job = JobSchema.parse({
@@ -242,13 +282,21 @@ export class AiService {
       createdAt: timestamp,
       expiresAt: new Date(this.now() + 30 * 60_000).toISOString(),
       status: 'queued',
+      informationQueue:
+        request.purpose === 'information'
+          ? draft.plan.steps.flatMap((s) =>
+              s.id === request.stepId && s.kind === 'stop' ? [s.placeId] : [],
+            )
+          : [],
       stage:
-        request.preference === 'scenic' ||
-        /percors|strad|cammin|luoghi|passegg|punti di interesse|aggiung|sostitui|alternativ|cambia.*(?:tappa|visita)/i.test(
-          request.text,
-        )
-          ? 'research'
-          : 'model',
+        request.purpose === 'information'
+          ? 'information'
+          : request.preference === 'scenic' ||
+              /percors|strad|cammin|luoghi|passegg|punti di interesse|aggiung|sostitui|alternativ|cambia.*(?:tappa|visita)/i.test(
+                request.text,
+              )
+            ? 'research'
+            : 'model',
       message: 'Richiesta pronta. Il programma resta invariato.',
     });
     await this.budget.start({ id: request.id, scope: tripId, requestHash });
@@ -281,8 +329,38 @@ export class AiService {
       clearTimeout(timer);
     }
   }
+  private withInformation(trip: Trip, updates: PlaceInformationUpdate[]): Trip {
+    const enriched = structuredClone(trip);
+    for (const update of updates) {
+      const place = enriched.plan.places.find((p) => p.id === update.placeId);
+      if (place) place.information = update.information;
+    }
+    return enriched;
+  }
+  private researchQuery(trip: Trip, placeId: string, dayId: string): EnrichmentQuery {
+    const place = trip.plan.places.find((p) => p.id === placeId);
+    const c = place?.coordinates;
+    if (
+      !place ||
+      !c ||
+      Date.parse(c.verifiedOn) > this.now() ||
+      this.now() - Date.parse(c.verifiedOn) > 365 * 24 * 3600_000
+    )
+      throw new AiPlanError(
+        'invalid',
+        'Servono coordinate verificate per cercare le informazioni del luogo.',
+      );
+    const query = {
+      name: place.name.slice(0, 160),
+      lat: c.lat,
+      lng: c.lng,
+      visitDate: trip.plan.days.find((d) => d.id === dayId)!.date,
+    };
+    validateResearchQuery(query);
+    return query;
+  }
   private collectRoutes(trip: Trip, job: Job): RouteQuery[] {
-    trip = withDiscovery(trip, job.discovery);
+    trip = this.withInformation(withDiscovery(trip, job.discovery), job.information);
     const queue: RouteQuery[] = [];
     const context = aiContext(
       job.request.draft ? applyTravel(trip, job.request.draft) : trip,
@@ -337,7 +415,7 @@ export class AiService {
   }
   private proposal(trip: Trip, job: Job, index: number): AiProposal {
     const original = trip;
-    trip = withDiscovery(trip, job.discovery);
+    trip = this.withInformation(withDiscovery(trip, job.discovery), job.information);
     const option = job.output!.options[index];
     let draft = job.request.draft ? applyTravel(trip, job.request.draft) : trip;
     const commands: TravelCommand[] = job.request.draft ? [job.request.draft] : [];
@@ -425,6 +503,14 @@ export class AiService {
         'Le proposte non modificano o cancellano prenotazioni. Verifica aperture e disponibilità.',
       ],
       commands,
+      information: job.information.filter((update) =>
+        draft.plan.days
+          .find((d) => d.id === job.request.dayId)
+          ?.stepIds.some((id) => {
+            const step = draft.plan.steps.find((s) => s.id === id);
+            return step?.kind === 'stop' && step.placeId === update.placeId;
+          }),
+      ),
       places: job.discovery.places.filter(
         (p) =>
           commands.some(
@@ -447,6 +533,24 @@ export class AiService {
       citations: [...citations, ...routes.flatMap((r) => r.citations)].slice(0, 20),
     };
     const projected = projectAiProposal(original, proposal);
+    for (const update of proposal.information ?? []) {
+      const day = projected.plan.days.find((d) => d.id === job.request.dayId)!;
+      for (const step of projected.plan.steps.filter(
+        (s) => s.kind === 'stop' && s.placeId === update.placeId && day.stepIds.includes(s.id),
+      )) {
+        if (
+          visitWindowStatus(
+            update.information,
+            step.start,
+            step.end,
+            step.timezone ?? projected.plan.timezone,
+          ) === 'outside'
+        )
+          proposal.warnings.push(
+            `Gli orari di «${step.title}» non rientrano nell’apertura indicata: verifica l’accesso o valuta una visita esterna.`,
+          );
+      }
+    }
     // Check original protected anchors independently of model/manual draft output.
     for (const before of original.plan.steps.filter(
       (s) =>
@@ -504,11 +608,13 @@ export class AiService {
             ? 'Cerco luoghi vicini usando solo informazioni pubbliche…'
             : j.stage === 'lookup'
               ? 'Cerco il luogo richiesto e la sua posizione nelle fonti pubbliche…'
-              : j.stage === 'model'
-                ? 'Valuto la giornata e gli orari fissi…'
-                : j.stage === 'routes'
-                  ? 'Controllo il percorso e i luoghi lungo la strada…'
-                  : 'Preparo il confronto con il programma attuale…';
+              : j.stage === 'information'
+                ? 'Cerco orari, prezzi e informazioni nelle fonti pubbliche…'
+                : j.stage === 'model'
+                  ? 'Valuto la giornata e gli orari fissi…'
+                  : j.stage === 'routes'
+                    ? 'Controllo il percorso e i luoghi lungo la strada…'
+                    : 'Preparo il confronto con il programma attuale…';
       });
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) return this.get(tripId, id);
@@ -543,16 +649,21 @@ export class AiService {
           j.status = 'planning';
         });
       } else if (job.stage === 'model') {
-        const enriched = withDiscovery(trip, job.discovery);
+        const enriched = this.withInformation(withDiscovery(trip, job.discovery), job.information);
         const context = aiContext(
           job.request.draft ? applyTravel(enriched, job.request.draft) : enriched,
           job.request,
           job.discovery.places.map((p) => p.id),
         );
         context.researchNotes = job.discovery.notes;
-        context.lookupAvailable = job.lookupRound === 0 && !!provider.lookup;
+        context.lookupAvailable =
+          job.lookupRound === 0 && job.informationRound === 0 && !!provider.lookup;
         context.conversation = await this.conversation(tripId, job.request, etag);
-        const operation = job.lookupRound ? `${id}-model-1` : `${id}-model`;
+        const operation = job.informationRound
+          ? `${id}-model-information`
+          : job.lookupRound
+            ? `${id}-model-1`
+            : `${id}-model`;
         await this.budget.reserve(id, {
           id: operation,
           fingerprint: hash(context),
@@ -577,6 +688,28 @@ export class AiService {
             j.message = 'Cerco il luogo richiesto nelle fonti pubbliche…';
           });
           return this.get(tripId, id);
+        }
+        if (job.informationRound === 0 && provider.informationAvailable && provider.enrich) {
+          const ids = [
+            ...new Set(
+              output.options.flatMap((o) =>
+                o.actions
+                  .filter((a) => a.type === 'add')
+                  .flatMap((a) => (a.placeId ? [a.placeId] : [])),
+              ),
+            ),
+          ].slice(0, 2);
+          if (ids.length) {
+            // Validate public target identity before persisting a paid research stage.
+            ids.forEach((placeId) => this.researchQuery(enriched, placeId, job.request.dayId));
+            await update((j) => {
+              j.output = output;
+              j.informationQueue = ids;
+              j.stage = 'information';
+              j.status = 'planning';
+            });
+            return this.get(tripId, id);
+          }
         }
         job.output = output;
         const queue = this.collectRoutes(trip, job);
@@ -635,9 +768,95 @@ export class AiService {
           j.stage = 'model';
           j.status = 'planning';
         });
+      } else if (job.stage === 'information') {
+        if (!provider.informationAvailable || !provider.enrich || !provider.enrichmentBound)
+          throw new AiPlanError('invalid', 'Ricerca delle informazioni non disponibile.');
+        const placeId = job.informationQueue[job.informationIndex];
+        const enriched = withDiscovery(trip, job.discovery);
+        const query = this.researchQuery(enriched, placeId, job.request.dayId);
+        const cachePath = `ai/information/${hash({ version: 1, query })}.json`;
+        const cached = await this.store.read(cachePath);
+        let cachedValue: unknown;
+        try {
+          cachedValue = cached ? JSON.parse(new TextDecoder().decode(cached.body)) : undefined;
+        } catch {
+          /* A corrupt private cache is never evidence. */
+        }
+        const parsed = PlaceInformationSchema.safeParse(cachedValue);
+        const existing = enriched.plan.places.find((p) => p.id === placeId)?.information;
+        let information = informationFresh(existing, query.visitDate, this.now())
+          ? existing
+          : parsed?.success && informationFresh(parsed.data, query.visitDate, this.now())
+            ? parsed.data
+            : undefined;
+        if (!information) {
+          const operation = `${id}-information-${job.informationIndex}`;
+          await this.budget.reserve(id, {
+            id: operation,
+            fingerprint: hash(query),
+            maxCost: provider.enrichmentBound(),
+          });
+          const value = await this.budget.dispatch(id, operation, () =>
+            this.bounded((signal) => provider.enrich!(query, signal, operation)),
+          );
+          if (!value)
+            throw new AiPlanError(
+              'invalid',
+              'La ricerca non ha fornito informazioni verificabili. Il programma resta invariato.',
+            );
+          information = PlaceInformationSchema.parse(value);
+          try {
+            await this.store.write(cachePath, encode(information), cached?.etag ?? 'create');
+          } catch (error) {
+            if (!(error instanceof ApiError && error.status === 412)) throw error;
+          }
+        }
+        const unchanged =
+          job.request.purpose === 'information' &&
+          JSON.stringify(existing) === JSON.stringify(information);
+        await update((j) => {
+          j.information.push({ placeId, information: information! });
+          j.informationIndex++;
+          const done = j.informationIndex >= j.informationQueue.length;
+          j.informationRound = done ? 1 : 0;
+          j.stage = done
+            ? j.request.purpose === 'information'
+              ? 'finalize'
+              : 'model'
+            : 'information';
+          j.status = 'planning';
+          if (done && j.request.purpose === 'information')
+            j.output = {
+              message: unchanged
+                ? 'Le informazioni sono già aggiornate per questa data. Nessuna nuova ricerca o modifica.'
+                : 'Ho raccolto le informazioni del luogo. Controlla fonti, data e prezzi prima di confermare.',
+              clarification: unchanged
+                ? 'Le informazioni sono già aggiornate per questa data.'
+                : null,
+              lookups: [],
+              options: unchanged
+                ? []
+                : [
+                    {
+                      title: 'Aggiorna le informazioni della tappa',
+                      explanation:
+                        'Aggiunge informazioni consultate nelle fonti pubbliche. Orari del programma, prenotazioni e stima originale dei costi restano invariati.',
+                      actions: [],
+                      routes: [],
+                      sourceIds: [],
+                    },
+                  ],
+            };
+          if (unchanged) {
+            j.stage = 'done';
+            j.status = 'clarification';
+            j.message = j.output!.message;
+          }
+        });
+        if (unchanged) await this.budget.finish(id);
       } else if (job.stage === 'routes') {
         const query = job.queue[job.routeIndex];
-        const enriched = withDiscovery(trip, job.discovery);
+        const enriched = this.withInformation(withDiscovery(trip, job.discovery), job.information);
         provider.validateRoute?.(query, enriched);
         const operation = `${id}-route-${job.routeIndex}`;
         await this.budget.reserve(id, {

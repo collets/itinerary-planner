@@ -71,7 +71,8 @@ No queue, database or new runtime is required for the pilot.
 
 The live adapter uses native `fetch` with no retries, fixed HTTPS hosts, rejected
 redirects and bounded bodies. Responses uses strict JSON output, `store:false`,
-no hosted tools and a configured output ceiling including reasoning. Explicit
+no hosted tools in the planner and a configured output ceiling including reasoning.
+The separate bounded information stage can enable hosted search as described below. Explicit
 `service_tier: default` avoids inheriting a costlier project tier; an unexpected
 returned tier is treated as an unverified charge.
 Every model request sends its persisted operation ID as `X-Client-Request-Id` for
@@ -124,15 +125,16 @@ schema compiler. A rejected model call without usage remains an unresolved
 liability; it is not automatically assumed free or retried.
 
 Landmark points are not confirmed entrances or postal addresses. Interior access,
-opening hours, tickets and prices remain unknown until separately verified.
+opening hours, tickets and prices remain unknown unless the bounded information
+stage finds applicable evidence; ticket availability is never guaranteed.
 Wikipedia coverage is limited: restaurants, shops and obscure attractions may
 require another evidenced provider in a future change. Short
 excerpts are attributed to Wikipedia contributors under CC BY-SA. Wikipedia is
 secondary evidence; openings, access, prices and suggested pause duration need
 verification. The research note and citations preserve that uncertainty. This
-does not implement unrestricted web search or official opening-hours lookup.
-Hosted search stays disabled until its complete billing/context bound can be
-proved and reserved. No model-selected URL is fetched.
+does not implement unrestricted web search. Official opening-hours research is
+a separate, quoted stage documented below. No model-selected URL is fetched by
+the application server.
 
 Provider failures log only the allowlisted host, a fixed category and (for HTTP
 rejections) the status code. Routing response contract failures use a fixed
@@ -325,3 +327,55 @@ Mobile browser tests use the production build with a temporary, zero-cost mock
 store. No browser can directly access provider credentials or a provider API.
 These are functional/security contract tests, not paid model evaluations or an
 independent penetration test.
+
+## Sourced stop information
+
+New/replacement stops can run one bounded information round (maximum two public
+places), then replan once with date-specific opening windows. Existing visit/meal
+stops offer **Aggiorna informazioni con AI**. The shortcut prepares an explicit
+request; it does not spend until sent. Selected-stop requests such as “Controlla
+orari e prezzi” also select the information flow when no schedule change is asked.
+Information-only requests never alter the schedule, reservations or original
+cost estimate, including for booked/completed activities. Every overlay is
+reviewed before saving, with inline citations and a check date. Original manual
+place descriptions remain intact; researched facts are a separate overlay.
+
+Set optional `AI_PRICING_JSON.enrichment = {search, expiresAt}` only after checking
+hosted-search pricing. `search` is integer microdollars per tool call (minimum
+10,000); the earlier token/search quote expiry wins. Omit it to disable enrichment
+without disabling existing itinerary assistance. No new account or runtime is
+needed. Research uses the configured Responses model, fixed OpenAI endpoint,
+`store:false`, standard tier, no redirects/retries, `parallel_tool_calls:false`,
+`max_tool_calls:2`, low search context and the ordinary output/40-second ceilings.
+Only public name, verified position and visit date enter its input; no raw user
+question, itinerary, traveler, accommodation, booking or ticket data.
+
+The reservation covers three possible model passes with the documented 128k
+hosted-search context ceiling (or the model ceiling if lower), the configured
+output ceiling and two search fees. Returned usage and tool counts are independently
+checked. All returned tool actions are conservatively counted as paid searches,
+even page-open/find actions. Known usage settles before rejecting malformed,
+incomplete or uncited facts. Unknown charges remain held for operator resolution.
+All stages count against the existing request/day/month/operation limits. No
+price/budget increase or failed-call retry occurs automatically.
+
+Citations must match actual hosted search sources or URL annotations. Public
+HTTPS links have no credentials, query, fragment or local/IP destinations and
+are only rendered, never fetched by our server. Official classification is a
+researched assessment; extracted facts can be mistaken. Practical fields require
+an official-classified source; conflicting or missing evidence stays unknown.
+Prices name the admission product and never imply availability or purchase.
+Check dates describe consultation, not a guarantee against subsequent closures.
+The final projected schedule warns when it lies outside sourced opening windows.
+
+Caches are private and reusable for 24 hours only for the same public identity
+and visit date. A current approved overlay is reused without another provider
+call; a repeated information update reports that it is already current.
+Approval includes an information widget using the same renderer as stop details;
+financial amounts remain untouched. General address geocoding, live booking
+availability and private accommodation research remain outside this capability.
+
+Billing/context and tool contracts checked on 2026-10-07:
+[Responses built-in call ceiling](https://developers.openai.com/api/reference/python/resources/responses/methods/create),
+[Hosted search context, citations and actions](https://developers.openai.com/api/docs/guides/tools-web-search),
+[Hosted-search pricing](https://developers.openai.com/api/docs/pricing).

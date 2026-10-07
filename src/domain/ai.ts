@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PlaceInformationSchema, type PlaceInformationUpdate } from './place-information.js';
 import { Id, SafeUrl, PlaceSchema, SourceSchema, TripSchema, type Trip } from './schema.js';
 import {
   TravelCommandSchema,
@@ -30,6 +31,7 @@ export const AiRequestSchema = z
     parentJobId: Id.optional(),
     text: z.string().trim().min(1).max(2000),
     preference: z.enum(['fastest', 'scenic']).default('fastest'),
+    purpose: z.enum(['adapt', 'information']).optional(),
     draft: TravelCommandSchema.optional(),
   })
   .strict()
@@ -179,13 +181,19 @@ export const AiProposalSchema = z
     commands: z.array(TravelCommandSchema).max(8),
     places: z.array(PlaceSchema).max(6).default([]),
     sources: z.array(SourceSchema).max(6).default([]),
+    information: z
+      .array(z.object({ placeId: Id, information: PlaceInformationSchema }).strict())
+      .max(2)
+      .default([]),
     routes: z.array(AiRouteSchema).max(6),
     citations: z.array(AiCitationSchema).max(20),
     previewHash: z.string().regex(/^[a-f0-9]{64}$/),
   })
   .strict();
 export type AiProposal = z.infer<typeof AiProposalSchema>;
-export type AiProposalInput = Omit<AiProposal, 'previewHash'>;
+export type AiProposalInput = Omit<AiProposal, 'previewHash' | 'information'> & {
+  information?: PlaceInformationUpdate[];
+};
 
 export class AiPlanError extends Error {
   constructor(
@@ -273,7 +281,20 @@ export function aiContext(trip: Trip, request: AiRequest, candidates: string[] =
       name: text(p.name, 160),
       address: text(p.address, 250),
       description: text(p.description),
-      openingHours: text(p.openingHours),
+      openingHours: text(p.information?.openingHours?.text ?? p.openingHours),
+      visitInformation: p.information
+        ? {
+            visitDate: p.information.visitDate,
+            openingHours: p.information.openingHours
+              ? {
+                  text: text(p.information.openingHours.text, 800),
+                  visitStatus: p.information.openingHours.visitStatus,
+                  windows: p.information.openingHours.windows,
+                }
+              : null,
+            warnings: p.information.warnings.slice(0, 3).map((v) => text(v, 300)),
+          }
+        : null,
       sourceIds: p.sourceIds.slice(0, 10),
     })),
     sources: trip.plan.sources
@@ -413,6 +434,37 @@ export function projectAiProposal(input: Trip, proposal: AiProposalInput): Trip 
   const previousIds = [...trip.travel!.appliedIds];
   trip = withDiscovery(trip, { places: proposal.places, sources: proposal.sources, notes: [] });
   const keys = new Set<string>();
+  const informationIds = new Set<string>();
+  for (const update of proposal.information ?? []) {
+    if (
+      informationIds.has(update.placeId) ||
+      update.information.visitDate !== trip.plan.days.find((d) => d.id === proposal.dayId)?.date
+    )
+      throw new AiPlanError(
+        'invalid',
+        'Le informazioni devono corrispondere al luogo e alla data della visita.',
+      );
+    informationIds.add(update.placeId);
+    const place = trip.plan.places.find((p) => p.id === update.placeId);
+    if (
+      !place ||
+      (!trip.plan.days
+        .find((d) => d.id === proposal.dayId)
+        ?.stepIds.some((id) => {
+          const step = trip.plan.steps.find((s) => s.id === id);
+          return step?.kind === 'stop' && step.placeId === place.id;
+        }) &&
+        !proposal.commands.some(
+          (c) => c.action.type === 'add' && c.action.stop.placeId === place.id,
+        ))
+    )
+      throw new AiPlanError(
+        'invalid',
+        'Le informazioni devono riguardare una tappa della giornata.',
+      );
+    keys.add(`information:${place.id}`);
+    place.information = PlaceInformationSchema.parse(update.information);
+  }
   for (const command of proposal.commands) {
     // The manual draft is validated by the existing engine. Model commands have
     // already passed the narrower intent allowlist before being persisted.

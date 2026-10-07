@@ -2741,3 +2741,25 @@ legend {
     width: 100%;
   }
 }
+
+.place-information {
+  display: grid;
+  gap: 0.8rem;
+  min-width: 0;
+}
+.place-information h4 {
+  margin: 0.25rem 0;
+}
+.place-information p {
+  margin: 0.3rem 0;
+  overflow-wrap: anywhere;
+}
+.research-citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+}
+.research-citations a {
+  overflow-wrap: anywhere;
+}

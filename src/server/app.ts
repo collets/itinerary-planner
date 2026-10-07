@@ -403,6 +403,9 @@ export function createApp(injected?: TripService, injectedAi?: AiService) {
     const currencies = [
       ...new Set([
         ...value.trip.plan.costs.map((cost) => cost.currency),
+        ...value.trip.plan.places.flatMap((p) =>
+          p.information?.price ? [p.information.price.currency] : [],
+        ),
         ...value.trip.state.reservations.flatMap((r) => (r.currency ? [r.currency] : [])),
       ]),
     ].filter((currency) => currency !== 'EUR');
