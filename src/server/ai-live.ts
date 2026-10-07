@@ -42,8 +42,21 @@ If the user wants scenic walking, suggest relevant public places in the supplied
 Prefer fewer changes, and request clarification if the request is ambiguous or cannot be safely satisfied. Never fabricate a workable schedule around a protected slot.
 Use sourceIds only from the supplied sources. No arbitrary URLs or searches beyond the bounded named lookup. Explain why the option is useful, without claiming it is the objectively best route.`;
 // Responses strict format requires lookups even though persisted old jobs default it.
+// Keep JS Unicode regexp syntax out of the provider schema. The domain schema
+// still validates names before any lookup dispatch; generation isn't validation.
 export const modelJsonSchema = z.toJSONSchema(
-  AiModelOutputSchema.extend({ lookups: AiPlaceLookupsSchema }),
+  AiModelOutputSchema.extend({
+    lookups: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(120),
+            area: z.string().min(1).max(80),
+          })
+          .strict(),
+      )
+      .max(2),
+  }),
   { target: 'draft-7' },
 );
 

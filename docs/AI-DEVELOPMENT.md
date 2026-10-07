@@ -117,6 +117,11 @@ blocks the second pass; there is no automatic retry, budget increase or recursiv
 search loop. Older saved outputs default to no lookup; the provider's strict
 schema requires an explicit `lookups` array. Broader time windows such as
 "nel pomeriggio" can produce estimated visit times/durations for review.
+The provider-facing lookup schema uses plain bounded strings; the server-side
+domain schema independently enforces the Unicode name allowlist before any
+external lookup. JavaScript Unicode regexp syntax is not sent to the provider's
+schema compiler. A rejected model call without usage remains an unresolved
+liability; it is not automatically assumed free or retried.
 
 Landmark points are not confirmed entrances or postal addresses. Interior access,
 opening hours, tickets and prices remain unknown until separately verified.

@@ -88,6 +88,8 @@ function directions(duration = 600, distance = 800) {
 describe('OpenAI Responses adapter contracts', () => {
   it('keeps named lookup required in the strict provider schema', () => {
     expect(modelJsonSchema.required).toContain('lookups');
+    const encoded = JSON.stringify(modelJsonSchema.properties?.lookups);
+    expect(encoded).not.toContain('\\p{');
   });
   it('resolves named landmarks with sourced coordinates, without forwarding the prompt or credentials', async () => {
     const fetch = vi.fn().mockResolvedValue(
