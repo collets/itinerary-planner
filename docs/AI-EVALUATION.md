@@ -53,10 +53,13 @@ See `tests/ai-foundation.test.ts`, `tests/ai-foundation-ui.test.tsx`,
 
 ## Required live acceptance before advertising broader support
 
-The live ledger remains disabled while a previous interrupted operation has
-unverified usage. Resolve it only through the existing owner-approved operator
-procedure. This implementation does not authorize reconciliation, enabling AI,
-increasing allowances or another paid request.
+The owner approved and completed conservative maximum accounting for the
+previous interrupted information operation on 2026-10-07. Its $0.119072 hold is
+resolved without redispatch or a claim of confirmed invoice usage. The existing
+$1 pilot remains the testing allowance; no caps or provider prices were changed.
+The first new manual-stop information acceptance request failed JSON parsing
+before research, with its known $0.001071 charge settled and no remaining hold.
+The test script disabled AI. Broader live acceptance remains outstanding.
 
 After reconciliation and explicit live approval, use a small batch in the
 isolated protected preview, within the existing cap. Record request/operation

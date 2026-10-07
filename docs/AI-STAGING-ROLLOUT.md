@@ -17,12 +17,13 @@ and [evaluation boundaries](AI-EVALUATION.md). Local scripted coverage is separa
 from live language-quality acceptance. Existing project/store isolation,
 credentials, prices and caps are retained.
 
-Paid staging remains disabled while operation
-`2efcb334-4572-4967-8f07-746c0ee6524b-information-0` has unverified usage.
-Its conservative held maximum is 119,072 microdollars ($0.119072). Owner-approved
-reconciliation and usage verification are prerequisites to enabling paid testing;
-approval to implement code does not release that hold. No provider calls or
-ledger changes are needed for the local contract/browser suites.
+On 2026-10-07 the owner explicitly approved conservative accounting for the
+interrupted information operation at its full reserved maximum: 119,072
+microdollars ($0.119072). Reconciliation succeeded; the durable ledger has no
+remaining reservation or active run. This is owner-approved maximum accounting,
+not independently verified invoice usage. The operation was not dispatched again.
+Bounded testing may continue under the existing $1 pilot and $0.30/request cap.
+No provider calls or ledger changes are needed for local contract/browser suites.
 
 ## Current state and release blockers
 

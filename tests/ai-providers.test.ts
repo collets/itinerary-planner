@@ -285,6 +285,37 @@ describe('OpenAI Responses adapter contracts', () => {
       actualCost: 215,
     });
   });
+  it.each([
+    { category: 'refusal', content: [{ type: 'refusal', refusal: 'private refusal text' }] },
+    { category: 'empty-output', content: [] },
+    {
+      category: 'invalid-json',
+      content: [{ type: 'output_text', text: 'private malformed text' }],
+    },
+  ])(
+    'classifies $category without logging private output or retrying',
+    async ({ category, content }) => {
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const fetch = vi.fn().mockResolvedValue(
+        json({
+          status: 'completed',
+          usage: { input_tokens: 100, output_tokens: 200 },
+          output: [{ type: 'message', content }],
+        }),
+      );
+      vi.stubGlobal('fetch', fetch);
+      expect(await provider().plan(context(), new AbortController().signal)).toEqual({
+        value: null,
+        actualCost: 50,
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(warning).toHaveBeenCalledWith(
+        'AI model reply rejected',
+        expect.objectContaining({ category }),
+      );
+      expect(JSON.stringify(warning.mock.calls)).not.toContain('private');
+    },
+  );
   it('restricts information targets to existing public stop IDs, excluding place IDs and schedule mode', () => {
     const input = aiContext(
       exampleTrip(),
