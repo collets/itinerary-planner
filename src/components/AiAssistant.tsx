@@ -9,6 +9,8 @@ import type { AiJobView } from '../server/ai';
 import { PlaceInformation } from './PlaceInformation';
 import { Modal } from './Modal';
 import { SchedulePreview } from './TravelEditor';
+import { AiInsights } from './AiInsights';
+import { time } from '../domain/trip';
 
 export type AiTarget = {
   dayId: string;
@@ -30,6 +32,25 @@ type SavedAdvice = {
 const pending = new Set(['queued', 'running', 'planning', 'routing']);
 const informationPrompt =
   'Cerca e aggiorna orari, prezzi, informazioni e curiosità di questa tappa per la data della visita, citando le fonti.';
+const informationFields = [
+  ['identifiedPlace', 'luogo individuato'],
+  ['description', 'descrizione'],
+  ['details', 'approfondimenti'],
+  ['trivia', 'curiosità'],
+  ['entrance', 'ingresso'],
+  ['openingHours', 'aperture'],
+  ['price', 'prezzo'],
+  ['website', 'sito ufficiale'],
+  ['bookingUrl', 'prenotazione'],
+] as const;
+const stageLabels = {
+  research: 'Luoghi vicini',
+  model: 'Valutazione della richiesta',
+  lookup: 'Ricerca del luogo',
+  information: 'Informazioni e fonti',
+  routes: 'Percorso a piedi',
+  finalize: 'Anteprima delle modifiche',
+};
 
 export function AiAssistant({
   target,
@@ -58,7 +79,8 @@ export function AiAssistant({
   const alive = useRef(true),
     stop = useRef(false),
     activity = useRef(0);
-  const key = `ai:${trip.id}:${target.dayId}:${target.stepId ?? 'day'}${target.purpose === 'information' ? ':information' : ''}`;
+  const key = `ai:${trip.id}:${target.dayId}:assistant-v2`;
+  const legacyKey = `ai:${trip.id}:${target.dayId}:${target.stepId ?? 'day'}${target.purpose === 'information' ? ':information' : ''}`;
   const endpoint = `/trips/${trip.id}/ai`;
   const selectedStep = trip.plan.steps.find((step) => step.id === target.stepId);
   const protectedStep =
@@ -69,8 +91,7 @@ export function AiAssistant({
       (selectedStep.kind === 'leg' && selectedStep.mode === 'flight'));
   useEffect(() => {
     alive.current = true;
-    void db.meta
-      .get(key)
+    void (async () => (await db.meta.get(key)) ?? (await db.meta.get(legacyKey)))()
       .then((item) => {
         if (!alive.current) return;
         const cached = item?.value as SavedAdvice | undefined;
@@ -157,7 +178,7 @@ export function AiAssistant({
       await remember({ ...value, job: current, savedAt: Date.now() });
     }
   };
-  const generate = async (resume = false) => {
+  const generate = async (resume = false, choice?: { id: string; label: string }) => {
     if (!online || busy) return;
     activity.current++;
     setBusy(true);
@@ -186,7 +207,8 @@ export function AiAssistant({
             dayId: target.dayId,
             ...(job ? { parentJobId: job.id } : {}),
             ...(target.stepId ? { stepId: target.stepId } : {}),
-            text,
+            text: choice?.label ?? text,
+            ...(choice ? { choiceId: choice.id } : {}),
             preference,
             purpose: target.purpose ?? 'adapt',
             ...(draft ? { draft } : {}),
@@ -286,8 +308,8 @@ export function AiAssistant({
           <div className="ai-intro">
             <Sparkles size={22} />
             <p>
-              Rivediamo il viaggio insieme. Scrivi cosa vorresti cambiare, poi confrontiamo le
-              proposte prima di salvare.
+              Chiedi informazioni, confronta alternative o adatta la giornata. Le modifiche si
+              salvano solo dopo la tua conferma.
             </p>
           </div>
           <section className="ai-context-widget" aria-label="Contesto della conversazione">
@@ -323,9 +345,9 @@ export function AiAssistant({
               </select>
             </label>
             <label>
-              Tappa da adattare
+              Tappa o percorso della conversazione
               <select
-                aria-label="Tappa da adattare"
+                aria-label="Tappa o percorso della conversazione"
                 value={target.stepId ?? ''}
                 disabled={busy || !!draft || (!!job && pending.has(job.status))}
                 onChange={(e) =>
@@ -355,7 +377,7 @@ export function AiAssistant({
             )}
             {selectedStep?.kind === 'stop' && (
               <div className="ai-stop-shortcuts" aria-label="Idee per questa tappa">
-                {['visit', 'meal'].includes(selectedStep.category) && (
+                {['visit', 'meal', 'free-time'].includes(selectedStep.category) && (
                   <button
                     className="button subtle"
                     disabled={!loaded || busy || !!draft || (!!job && pending.has(job.status))}
@@ -425,6 +447,39 @@ export function AiAssistant({
                 <option value="scenic">Con luoghi interessanti lungo la strada</option>
               </select>
             </label>
+            <div className="ai-stop-shortcuts" aria-label="Idee per la giornata">
+              {[
+                [
+                  'Cosa ci resta?',
+                  'Riassumi le attività rimanenti, i margini e gli orari da rispettare.',
+                ],
+                [
+                  'Controlla la giornata',
+                  'Controlla la fattibilità della giornata, i percorsi e le aperture già disponibili. Segnala cosa manca.',
+                ],
+                [
+                  'Ritmo più tranquillo',
+                  'Proponi una giornata con meno cammino e pause, mantenendo le attività prenotate e fisse.',
+                ],
+                [
+                  'Costi',
+                  'Riassumi i costi stimati della giornata per tutti e i pagamenti separati, con conversioni in euro disponibili.',
+                ],
+                [
+                  'Cronologia',
+                  'Quali modifiche della giornata posso annullare? Mostrami le scelte dalla cronologia.',
+                ],
+              ].map(([label, prompt]) => (
+                <button
+                  key={label}
+                  className="button subtle"
+                  disabled={!loaded || busy || !!draft || (!!job && pending.has(job.status))}
+                  onClick={() => setText(prompt)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </section>
           {aiMode === 'mock' && (
             <p className="warning-note">
@@ -473,6 +528,103 @@ export function AiAssistant({
                   {new Date(saved?.savedAt ?? Date.now()).toLocaleString('it-IT')}
                 </p>
                 <p role="status">{job.message}</p>
+                {job.task?.constraints.preferences.length ? (
+                  <p className="small">
+                    Preferenze: {job.task.constraints.preferences.join(' · ')}
+                  </p>
+                ) : null}
+                {job.task && (
+                  <div className="small" aria-label="Vincoli della richiesta">
+                    {job.task.constraints.keepStepIds.length > 0 && (
+                      <p>
+                        Da conservare:{' '}
+                        {job.task.constraints.keepStepIds
+                          .map((id) => trip.plan.steps.find((s) => s.id === id)?.title)
+                          .join(', ')}
+                        .
+                      </p>
+                    )}
+                    {job.task.constraints.maxWalkingMinutes !== null && (
+                      <p>
+                        Limite a piedi nella giornata: {job.task.constraints.maxWalkingMinutes} min.
+                      </p>
+                    )}
+                    {job.task.constraints.avoidPlaceIds.length > 0 && (
+                      <p>
+                        Luoghi da evitare:{' '}
+                        {job.task.constraints.avoidPlaceIds
+                          .map((id) => trip.plan.places.find((p) => p.id === id)?.name ?? id)
+                          .join(', ')}
+                        .
+                      </p>
+                    )}
+                    {job.task.constraints.finishBy && (
+                      <p>
+                        Fine entro le {time(job.task.constraints.finishBy, trip.plan.timezone)}.
+                      </p>
+                    )}
+                    {job.task.constraints.requireOpenPlaceIds.length > 0 && (
+                      <p>Le visite richieste devono rientrare nelle aperture verificate.</p>
+                    )}
+                    {(job.task.constraints.visitNotBefore ||
+                      job.task.constraints.visitNotAfter) && (
+                      <p>
+                        Fascia per visite aggiunte o spostate:{' '}
+                        {job.task.constraints.visitNotBefore
+                          ? `dalle ${time(job.task.constraints.visitNotBefore, trip.plan.timezone)}`
+                          : ''}{' '}
+                        {job.task.constraints.visitNotAfter
+                          ? `entro le ${time(job.task.constraints.visitNotAfter, trip.plan.timezone)}`
+                          : ''}
+                        .
+                      </p>
+                    )}
+                  </div>
+                )}
+                {job.task?.pendingQuestion && job.status === 'clarification' && (
+                  <div className="ai-stop-shortcuts" aria-label="Risposte alla domanda">
+                    {job.task.pendingQuestion.choices.map((choice) => (
+                      <button
+                        key={choice.id}
+                        className="button subtle"
+                        disabled={!online || busy || Date.parse(job.expiresAt) <= Date.now()}
+                        onClick={() => void generate(false, choice)}
+                      >
+                        {choice.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {job.insights && <AiInsights insights={job.insights} />}
+                {!!job.trace?.length && (
+                  <details>
+                    <summary>Verifiche eseguite</summary>
+                    {job.trace.map((entry, index) => (
+                      <p className="small" key={index}>
+                        {stageLabels[entry.stage]} ·{' '}
+                        {entry.outcome === 'failed'
+                          ? 'non completata'
+                          : entry.outcome === 'clarification'
+                            ? 'serve una scelta'
+                            : 'completata'}
+                      </p>
+                    ))}
+                  </details>
+                )}
+                {(job.facts ?? []).length > 0 && !job.proposals.length && (
+                  <details>
+                    <summary>Informazioni e fonti consultate</summary>
+                    {job.facts!.map((fact) => (
+                      <PlaceInformation key={fact.placeId} information={fact.information} />
+                    ))}
+                  </details>
+                )}
+                {job.failure && job.status === 'failed' && (
+                  <p className="small">
+                    Puoi consultare i dati e le fonti salvate o usare Adatta. La richiesta non viene
+                    ripetuta automaticamente.
+                  </p>
+                )}
               </div>
               {job.proposals.map((proposal) => (
                 <Proposal
@@ -601,7 +753,36 @@ function Proposal({
             {[...trip.plan.places, ...proposal.places].find((p) => p.id === update.placeId)?.name} ·
             informazioni proposte
           </h4>
+          <p className="small">
+            Campi aggiornati:{' '}
+            {informationFields
+              .filter(
+                ([key]) =>
+                  JSON.stringify(
+                    trip.plan.places.find((p) => p.id === update.placeId)?.information?.[key],
+                  ) !== JSON.stringify(update.information[key]),
+              )
+              .map(([, label]) => label)
+              .join(', ') || 'data e fonti della verifica'}
+            . I campi non verificati sono indicati come non disponibili.
+          </p>
           <PlaceInformation information={update.information} />
+        </section>
+      ))}
+      {(proposal.locations ?? []).map((location) => (
+        <section className="ai-route" key={location.placeId}>
+          <h4>
+            Posizione proposta · {trip.plan.places.find((p) => p.id === location.placeId)?.name}
+          </h4>
+          <p>
+            Luogo individuato: {location.candidateName}. Coordinate da fonte pubblica:{' '}
+            {location.coordinates.lat}, {location.coordinates.lng}.
+          </p>
+          <p className="small">
+            Consultate il {location.coordinates.verifiedOn}. La posizione del monumento può
+            differire dall’ingresso visitatori. Nome, biglietti e prenotazioni restano collegati
+            alla tappa originale.
+          </p>
         </section>
       ))}
       {proposal.routes.map((route, i) => (

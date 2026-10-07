@@ -198,5 +198,14 @@ are scoped to the public name/destination, optional verified coordinates and exa
 visit date. Optional `identifiedPlace` is a cited name/city used to make a public
 name match visible in review; old overlays without it remain valid. Visitor
 information can be researched for manual stops without coordinates, but this does
-not supply routing coordinates or change the saved location. Never place
+not itself supply routing coordinates or change the saved location. Never place
 personal names, accommodation or credentials in public research fields.
+
+Separate AI `locations` proposals can match an existing public place to a sourced
+candidate, carrying fresh coordinates and verified source IDs. They preserve the
+place and stop IDs and do not replace authored descriptions. Review the public
+identity match and building-point/entrance uncertainty before applying.
+`location:{placeId}` history fingerprints cover coordinates and source IDs, so
+undo cannot overwrite intervening manual location edits. Combined information,
+location and schedule changes commit as one proposal/history entry. Newly added
+AI public visits use the `visit` category and can be researched afterwards.

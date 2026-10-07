@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { AiTaskSchema, type AiTask } from './ai-task.js';
+import { AI_CAPABILITIES } from './ai-capabilities.js';
+import { dayInsights, undoChoices } from './ai-insights.js';
 import { PlaceInformationSchema, type PlaceInformationUpdate } from './place-information.js';
 import { Id, SafeUrl, PlaceSchema, SourceSchema, TripSchema, type Trip } from './schema.js';
 import {
@@ -29,6 +32,7 @@ export const AiRequestSchema = z
     dayId: Id,
     stepId: Id.optional(),
     parentJobId: Id.optional(),
+    choiceId: Id.optional(),
     text: z.string().trim().min(1).max(2000),
     preference: z.enum(['fastest', 'scenic']).default('fastest'),
     purpose: z.enum(['adapt', 'information']).optional(),
@@ -77,6 +81,13 @@ export const AiModelOutputSchema = z
     lookups: AiPlaceLookupsSchema.default([]),
     // Existing stop IDs only; read-only research never carries schedule actions.
     informationRequests: z.array(Id).max(2).default([]),
+    placeInformationRequests: z.array(Id).max(2).default([]),
+    task: AiTaskSchema.nullable().default(null),
+    locationRequests: z
+      .array(z.object({ placeId: Id, candidateId: Id }).strict())
+      .max(2)
+      .default([]),
+    historyRequest: Id.nullable().default(null),
     options: z
       .array(
         z
@@ -169,6 +180,16 @@ export const AiRouteSchema = z
   })
   .strict();
 export type AiRoute = z.infer<typeof AiRouteSchema>;
+export const AiLocationUpdateSchema = z
+  .object({
+    placeId: Id,
+    candidateId: Id,
+    candidateName: z.string().min(1).max(160),
+    coordinates: PlaceSchema.shape.coordinates.unwrap(),
+    sourceIds: z.array(Id).min(1).max(6),
+  })
+  .strict();
+export type AiLocationUpdate = z.infer<typeof AiLocationUpdateSchema>;
 export const AiProposalSchema = z
   .object({
     id: Id,
@@ -184,6 +205,7 @@ export const AiProposalSchema = z
     commands: z.array(TravelCommandSchema).max(8),
     places: z.array(PlaceSchema).max(6).default([]),
     sources: z.array(SourceSchema).max(6).default([]),
+    locations: z.array(AiLocationUpdateSchema).max(2).default([]),
     information: z
       .array(z.object({ placeId: Id, information: PlaceInformationSchema }).strict())
       .max(2)
@@ -194,8 +216,9 @@ export const AiProposalSchema = z
   })
   .strict();
 export type AiProposal = z.infer<typeof AiProposalSchema>;
-export type AiProposalInput = Omit<AiProposal, 'previewHash' | 'information'> & {
+export type AiProposalInput = Omit<AiProposal, 'previewHash' | 'information' | 'locations'> & {
   information?: PlaceInformationUpdate[];
+  locations?: AiLocationUpdate[];
 };
 
 export class AiPlanError extends Error {
@@ -209,7 +232,12 @@ export class AiPlanError extends Error {
 }
 
 /** Explicit allowlist: never serialize a Trip or operational state to a model. */
-export function aiContext(trip: Trip, request: AiRequest, candidates: string[] = []) {
+export function aiContext(
+  trip: Trip,
+  request: AiRequest,
+  candidates: string[] = [],
+  now = Date.now(),
+) {
   const day = trip.plan.days.find((d) => d.id === request.dayId);
   if (!day) throw new AiPlanError('invalid', 'Scegli una giornata del viaggio.');
   const steps = day.stepIds.map((id) => trip.plan.steps.find((s) => s.id === id)!);
@@ -242,10 +270,43 @@ export function aiContext(trip: Trip, request: AiRequest, candidates: string[] =
     url.hash = '';
     return url.toString();
   };
+  const insights = dayInsights(trip, day.id, now);
+  const modelCosts = Object.fromEntries(
+    Object.entries(insights.costs).map(([currency, row]) => [
+      currency,
+      { min: row.min, max: row.max, unknown: row.unknown, euro: row.euro },
+    ]),
+  );
   return {
-    day: { id: day.id, date: day.date, timezone: trip.plan.timezone },
+    day: {
+      id: day.id,
+      date: day.date,
+      timezone: trip.plan.timezone,
+      destinations: trip.plan.destinations.slice(0, 3).map((v) => text(v, 80)),
+    },
     researchNotes: [] as string[],
+    capabilities: AI_CAPABILITIES.map(({ id, permission, limit }) => ({ id, permission, limit })),
+    toolsAvailable: { discovery: false, information: false, routing: true },
+    task: null as AiTask | null,
+    selectedChoice: null as {
+      id: string;
+      label: string;
+      stepId: string | null;
+      placeId: string | null;
+    } | null,
+    planningFeedback: null as string | null,
+    routeResults: [] as Array<{
+      fromPlaceId: string;
+      toPlaceId: string;
+      walkingMinutes: number;
+      pauseMinutes: number;
+      poiPlaceIds: string[];
+      estimate: boolean;
+    }>,
+    insights: { ...insights, costs: modelCosts },
+    history: undoChoices(trip, day.id),
     lookupAvailable: false,
+    candidatePlaceIds: candidates.slice(0, 6),
     conversation: [] as Array<{
       request: string;
       response: string;
@@ -287,12 +348,43 @@ export function aiContext(trip: Trip, request: AiRequest, candidates: string[] =
     places: places.map((p) => ({
       id: p.id,
       name: text(p.name, 160),
-      address: text(p.address, 250),
+      // Private accommodation/logistics fields do not belong in public research.
+      address:
+        steps.some(
+          (s) =>
+            s.kind === 'stop' &&
+            s.placeId === p.id &&
+            ['visit', 'meal', 'free-time'].includes(s.category),
+        ) || candidates.includes(p.id)
+          ? text(p.address, 250)
+          : '',
+      location: {
+        hasCoordinates:
+          !!p.coordinates &&
+          Date.parse(p.coordinates.verifiedOn) <= now &&
+          now - Date.parse(p.coordinates.verifiedOn) <= 365 * 24 * 3600_000,
+        verifiedOn: p.coordinates?.verifiedOn ?? null,
+      },
       description: text(p.description),
       openingHours: text(p.information?.openingHours?.text ?? p.openingHours),
       visitInformation: p.information
         ? {
             visitDate: p.information.visitDate,
+            checkedAt: p.information.checkedAt,
+            description: p.information.description
+              ? { ...p.information.description, text: text(p.information.description.text) }
+              : null,
+            details: p.information.details
+              ? { ...p.information.details, text: text(p.information.details.text) }
+              : null,
+            trivia: p.information.trivia
+              ? { ...p.information.trivia, text: text(p.information.trivia.text) }
+              : null,
+            entrance: p.information.entrance
+              ? { ...p.information.entrance, text: text(p.information.entrance.text) }
+              : null,
+            price: p.information.price,
+            sources: p.information.sources.map((s) => ({ ...s, url: publicUrl(s.url) })),
             openingHours: p.information.openingHours
               ? {
                   text: text(p.information.openingHours.text, 800),
@@ -319,6 +411,21 @@ export function aiContext(trip: Trip, request: AiRequest, candidates: string[] =
   };
 }
 export type AiContext = ReturnType<typeof aiContext>;
+
+/** Contractions free time before expansions, preserving other dependencies. */
+export function orderAiIntents(trip: Trip, intents: AiIntent[]) {
+  const reduction = (intent: AiIntent) => {
+    const step = trip.plan.steps.find((s) => s.id === intent.stepId);
+    return (
+      intent.type === 'timing' &&
+      intent.start === null &&
+      !!step &&
+      intent.durationMinutes !== null &&
+      intent.durationMinutes < (Date.parse(step.end) - Date.parse(step.start)) / 60000
+    );
+  };
+  return [...intents.filter(reduction), ...intents.filter((intent) => !reduction(intent))];
+}
 
 export function intentAction(
   trip: Trip,
@@ -354,7 +461,7 @@ export function intentAction(
         id: `stop-${commandId.slice(0, 70)}`,
         kind: 'stop',
         placeId: place.id,
-        category: 'free-time',
+        category: 'visit',
         title: intent.title,
         start,
         end: new Date(Date.parse(start) + intent.durationMinutes * 60000).toISOString(),
@@ -443,6 +550,22 @@ export function projectAiProposal(input: Trip, proposal: AiProposalInput): Trip 
   trip = withDiscovery(trip, { places: proposal.places, sources: proposal.sources, notes: [] });
   const keys = new Set<string>();
   const informationIds = new Set<string>();
+  for (const update of proposal.locations ?? []) {
+    const place = trip.plan.places.find((p) => p.id === update.placeId);
+    if (
+      !place ||
+      !update.sourceIds.every((id) =>
+        trip.plan.sources.some((s) => s.id === id && s.status.startsWith('verified_')),
+      )
+    )
+      throw new AiPlanError(
+        'invalid',
+        'La posizione richiede un luogo esistente e fonti verificate.',
+      );
+    keys.add(`location:${place.id}`);
+    place.coordinates = structuredClone(update.coordinates);
+    place.sourceIds = [...new Set([...place.sourceIds, ...update.sourceIds])];
+  }
   for (const update of proposal.information ?? []) {
     if (
       informationIds.has(update.placeId) ||

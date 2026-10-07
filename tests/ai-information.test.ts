@@ -12,6 +12,7 @@ import { TripService } from '../src/server/service';
 import { FileStorage } from '../src/server/storage';
 import { information } from './fixtures/place-information';
 import type { EnrichmentQuery } from '../src/server/ai-enrichment';
+import { emptyConstraints } from '../src/domain/ai-task';
 
 const now = Date.parse('2026-10-05T12:00:00Z');
 class ResearchMock extends MockAiProviders {
@@ -85,7 +86,7 @@ describe('Place research orchestration and approval', () => {
     for (let n = 0; n < 5 && ['queued', 'planning'].includes(job.status); n++)
       job = await ai.advance('example-trip', job.id);
     expect(job.status, job.message).toBe('ready');
-    expect(plan).not.toHaveBeenCalled();
+    expect(plan).toHaveBeenCalledOnce();
     expect(route).not.toHaveBeenCalled();
     expect(provider.enrich.mock.calls[0][0]).toEqual({
       name: 'Museo del borgo',
@@ -112,6 +113,12 @@ describe('Place research orchestration and approval', () => {
           lookups: [],
           informationRequests: [],
           options: [],
+          task: {
+            goals: ['research'],
+            targetStepIds: [],
+            constraints: emptyConstraints(),
+            pendingQuestion: { question: 'Intendi il museo del borgo?', choices: [] },
+          },
         },
       })
       .mockResolvedValueOnce({
@@ -146,7 +153,7 @@ describe('Place research orchestration and approval', () => {
     for (let n = 0; n < 8 && ['queued', 'planning'].includes(job.status); n++)
       job = await ai.advance('example-trip', job.id);
     expect(job.status, job.message).toBe('ready');
-    expect(plan.mock.calls[1][0].request.purpose).toBe('information');
+    expect(plan.mock.calls[1][0].task?.goals).toContain('research');
     expect(plan.mock.calls[1][0].conversation[0].response).toContain('Intendi');
     expect(provider.enrich).toHaveBeenCalledOnce();
     expect(route).not.toHaveBeenCalled();
@@ -178,6 +185,7 @@ describe('Place research orchestration and approval', () => {
       id: 'no-read-only-route',
       dayId: 'day-one',
       text: 'Orari e prezzi del museo?',
+      purpose: 'information',
     });
     await ai.create('example-trip', request, original.etag);
     const job = await ai.advance('example-trip', request.id);
@@ -213,6 +221,7 @@ describe('Place research orchestration and approval', () => {
     const item = (await trips.store.read(path))!;
     const parent = JSON.parse(new TextDecoder().decode(item.body));
     parent.request.text = 'Dammi informazioni su orari e prezzi';
+    delete parent.task;
     await trips.store.write(path, new TextEncoder().encode(JSON.stringify(parent)), item.etag);
     await ai.create(
       'example-trip',
@@ -288,7 +297,7 @@ describe('Place research orchestration and approval', () => {
     for (let i = 0; i < 5 && ['queued', 'planning'].includes(job.status); i++)
       job = await ai.advance('example-trip', job.id);
     expect(job.status).toBe('ready');
-    expect(plan).not.toHaveBeenCalled();
+    expect(plan).toHaveBeenCalledOnce();
     expect(provider.enrich).toHaveBeenCalledTimes(1);
   });
   it('updates an existing booked stop only after approval, preserves financial state and supports one undo', async () => {
@@ -357,7 +366,7 @@ describe('Place research orchestration and approval', () => {
     const proposal = second.job.proposals[0];
     await ai.apply('example-trip', proposal.id, proposal.previewHash, second.original.etag);
     const third = await run('cache-three');
-    expect(third.job.status).toBe('clarification');
+    expect(third.job.status).toBe('answered');
     expect(provider.enrich).toHaveBeenCalledTimes(1);
     expect(third.job.proposals).toHaveLength(0);
     expect(await ai.budget.status()).toMatchObject({ active: 0, reserved: 0, monthly: 10000 });

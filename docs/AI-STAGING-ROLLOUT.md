@@ -9,6 +9,21 @@ for private staging evaluation, with verified spending controls and a reversible
 rollout. Keep the existing React/Vite, Hono, Node and private Blob architecture.
 See [implementation and controls](AI-DEVELOPMENT.md) for the current contracts.
 
+## Phase 0–2 implementation update (2026-10-07)
+
+The owner approved the conversation/day-assistance foundation on
+`feature/ai-assistance`. See [current behavior](AI-DEVELOPMENT.md#phase-02-foundation)
+and [evaluation boundaries](AI-EVALUATION.md). Local scripted coverage is separate
+from live language-quality acceptance. Existing project/store isolation,
+credentials, prices and caps are retained.
+
+Paid staging remains disabled while operation
+`2efcb334-4572-4967-8f07-746c0ee6524b-information-0` has unverified usage.
+Its conservative held maximum is 119,072 microdollars ($0.119072). Owner-approved
+reconciliation and usage verification are prerequisites to enabling paid testing;
+approval to implement code does not release that hold. No provider calls or
+ledger changes are needed for the local contract/browser suites.
+
 ## Current state and release blockers
 
 - Feature branch: `feature/ai-assistance`; `448cb37` was the baseline before rollout preparation.

@@ -164,6 +164,11 @@ function canonical(value: unknown): string {
   return JSON.stringify(sort(value));
 }
 export function fingerprint(trip: Trip, key: string): string {
+  if (key.startsWith('location:')) {
+    const place = trip.plan.places.find((p) => p.id === key.slice(9));
+    if (!place) throw new TravelError('conflict', 'Il luogo non è più disponibile.');
+    return canonical({ coordinates: place.coordinates ?? null, sourceIds: place.sourceIds });
+  }
   if (key.startsWith('information:')) {
     const place = trip.plan.places.find((p) => p.id === key.slice(12));
     if (!place) throw new TravelError('conflict', 'Il luogo non è più disponibile.');
@@ -408,6 +413,15 @@ function restoreSnapshot(
   keys: string[],
 ) {
   for (const key of keys) {
+    if (key.startsWith('location:')) {
+      const place = trip.plan.places.find((p) => p.id === key.slice(9));
+      const saved = before.plan.places.find((p) => p.id === place?.id);
+      if (!place || !saved) throw new TravelError('conflict', 'Il luogo non è più disponibile.');
+      if (saved.coordinates) place.coordinates = structuredClone(saved.coordinates);
+      else delete place.coordinates;
+      place.sourceIds = [...saved.sourceIds];
+      continue;
+    }
     if (key.startsWith('information:')) {
       const place = trip.plan.places.find((p) => p.id === key.slice(12));
       if (!place) throw new TravelError('conflict', 'Il luogo non è più disponibile.');

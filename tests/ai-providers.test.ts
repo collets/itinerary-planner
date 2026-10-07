@@ -258,7 +258,17 @@ describe('OpenAI Responses adapter contracts', () => {
     expect(modelJsonSchema).toMatchObject({
       type: 'object',
       additionalProperties: false,
-      required: ['message', 'clarification', 'lookups', 'informationRequests', 'options'],
+      required: [
+        'message',
+        'clarification',
+        'lookups',
+        'informationRequests',
+        'placeInformationRequests',
+        'task',
+        'locationRequests',
+        'historyRequest',
+        'options',
+      ],
     });
   });
   it('preserves a known charge when the model refuses, truncates or produces unusable JSON', async () => {

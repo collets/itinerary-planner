@@ -9,6 +9,7 @@ import { AiPlanError } from '../domain/ai.js';
 import type { PlaceInformation } from '../domain/place-information.js';
 import type { EnrichmentQuery } from './ai-enrichment.js';
 import type { Trip } from '../domain/schema.js';
+import { informationQuestion } from '../domain/ai-request.js';
 
 export type RouteQuery = { fromPlaceId: string; toPlaceId: string; poiPlaceIds: string[] };
 export type Charged<T> = { value: T; actualCost: number };
@@ -65,6 +66,37 @@ export class MockAiProviders implements AiProviders {
     _requestId?: string,
   ): Promise<Charged<AiModelOutputInput>> {
     const text = context.request.text.toLocaleLowerCase('it');
+    // Deterministic demo only. Live routing is semantic and uses structured tasks.
+    if (informationQuestion(text)) {
+      const selected =
+        context.steps.find((s) => s.id === context.request.stepId) ??
+        context.steps.find(
+          (s) =>
+            s.kind === 'stop' &&
+            'category' in s &&
+            ['visit', 'meal', 'free-time'].includes(s.category),
+        );
+      return {
+        actualCost: 0,
+        value: {
+          message: 'Informazioni dai dati salvati; la demo non esegue ricerche online.',
+          clarification: null,
+          lookups: [],
+          informationRequests: context.toolsAvailable.information && selected ? [selected.id] : [],
+          options: [],
+        },
+      };
+    }
+    if (/resta|margine|riepilog|quanto.*cost|quanto.*cammin/.test(text))
+      return {
+        actualCost: 0,
+        value: {
+          message: `Dati salvati: ${context.insights.remainingStepIds.length} attività rimanenti, ${context.insights.walkingMinutes} minuti a piedi. Consulta il riepilogo della giornata per margini, costi e verifiche.`,
+          clarification: null,
+          lookups: [],
+          options: [],
+        },
+      };
     if (/sostitui|alternativ|cambia.*(?:tappa|visita)/.test(text))
       return {
         actualCost: 0,

@@ -77,36 +77,49 @@ The command body is `{id, action, routes, expected, at}`. `id` is a unique stabl
 or `live`. AI is disabled unless both provider configuration and the independent
 durable ledger allow it. Existing browser sessions/agent tokens can use:
 
-| Method | Path under `/api/v2/trips/{id}/ai` | Behavior                                                                                                   |
-| ------ | ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| POST   | `/requests`                        | `{id, dayId, stepId?, parentJobId?, text, preference?, purpose?, draft?}`; current X-Trip-Version required |
-| GET    | `/requests/{jobId}`                | Status, Italian message and validated proposals; read only                                                 |
-| POST   | `/requests/{jobId}/advance`        | One claimed/reserved stage; `{}` body; no automatic provider retries                                       |
-| POST   | `/requests/{jobId}/cancel`         | Stop future work; dispatched liabilities remain held                                                       |
-| POST   | `/proposals/{proposalId}/apply`    | `{previewHash}` plus current X-Trip-Version; exact proposal approval and one atomic write                  |
+| Method | Path under `/api/v2/trips/{id}/ai` | Behavior                                                                                                              |
+| ------ | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/requests`                        | `{id, dayId, stepId?, parentJobId?, choiceId?, text, preference?, purpose?, draft?}`; current X-Trip-Version required |
+| GET    | `/requests/{jobId}`                | Status, Italian message and validated proposals; read only                                                            |
+| POST   | `/requests/{jobId}/advance`        | One claimed/reserved stage; `{}` body; no automatic provider retries                                                  |
+| POST   | `/requests/{jobId}/cancel`         | Stop future work; dispatched liabilities remain held                                                                  |
+| POST   | `/proposals/{proposalId}/apply`    | `{previewHash}` plus current X-Trip-Version; exact proposal approval and one atomic write                             |
 
 Use a stable unique request ID for network retries. Create is idempotent only for
 the same payload, trip and original version; different payloads with the same ID
 return 409. `preference` is `fastest` (default) or `scenic`. The text is 1–2,000
 characters. `purpose` is `adapt` (default) or `information`; information requests
-require configured web research and no draft. A selected public visit/meal stop
-can be researched directly; general-chat questions select at most two existing
-public stops through bounded `informationRequests` IDs, never scheduling or routing.
+require configured web research and no draft. A selected public visit/meal/free-time
+stop can be researched directly. General chat uses semantic answer/research/compare/
+propose/undo goals; mixed research and edits are allowed only in proposal mode.
+At most two public places can be researched, independently of routing coordinates.
 Research uses the public name and destination, with verified coordinates when
-available. Confirmation replies retain information intent through up to three
-previous turns, including replies saved before this behavior was introduced.
+available. Persisted tasks retain goals, targets, constraints and a pending
+question. Confirmation replies use that state alongside up to three previous
+turns. `choiceId` requires a parent and must match a nonexpired pending choice
+owned by that trip/day; its target is resolved server-side, never trusted from
+submitted text. A follow-up supersedes its parent's unapplied proposal.
 A parent job must belong to the same trip/day and be terminal. Draft
 is a validated TravelCommand, not a saved itinerary edit. Only flexible same-day
 delay/timing/skip/move/add drafts are accepted; lock, restore, undo, shared notes,
 actual-departure overrides and booking acknowledgments cannot enter this API.
 Reading a job never
-spends money. Unknown charges return an uncertain status requiring operator
+spends money. Jobs may terminate as `answered` with no proposal, `clarification`,
+`ready`, `failed`, `uncertain`, `cancelled` or `applied`. Responses include `task`,
+independent researched `facts`, deterministic day `insights`, a fixed `failure`
+category when present, and a privacy-safe stage `trace`. Facts remain readable
+when a compound proposal cannot be produced. Unknown charges return an uncertain status requiring operator
 verification; polling or lease expiry cannot trigger a repeat dispatch.
 
 Proposal objects contain stable IDs, base version, 30-minute expiry, a preview
-hash, typed commands, optional discovered catalog entries, dated field-level information overlays, route evidence and
+hash, typed commands, optional discovered catalog entries, dated field-level information
+overlays, sourced `locations` overlays for existing public places, route evidence and
 citations. Inspect them in the job response. Apply rejects modified/stale/expired
-proposals and revalidates all protected anchors. Repeated apply returns the
+proposals, rejects superseded proposals and revalidates all protected anchors.
+History undo is one version-bound proposal command selected from available
+selected-day entries; it cannot be mixed with other actions. Compound overlays
+and schedule changes use one atomic trip write and one undoable history entry.
+Repeated apply returns the
 current committed trip even if the original version is stale. V1 access returns
 426; disabled travel editing rejects AI mutations too. Offline drafts/advice are
 local only, not jobs automatically purchased after reconnection.

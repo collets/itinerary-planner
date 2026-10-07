@@ -66,7 +66,7 @@ test('AI assistance targets the selected stop from overview, details and header'
   const before = await read();
   await page.getByRole('button', { name: 'Chiedi aiuto per Museo del borgo', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Assistente di viaggio' });
-  const target = dialog.getByRole('combobox', { name: 'Tappa da adattare' });
+  const target = dialog.getByRole('combobox', { name: 'Tappa o percorso della conversazione' });
   const input = dialog.getByRole('textbox', { name: 'Richiesta di assistenza' });
   await expect(target).toHaveValue('museum');
   await dialog.getByRole('button', { name: 'Sostituisci la tappa', exact: true }).click();

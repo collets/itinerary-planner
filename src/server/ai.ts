@@ -8,6 +8,14 @@ import {
 } from '../domain/place-information.js';
 import { validateResearchQuery, type EnrichmentQuery } from './ai-enrichment.js';
 import { confirmationReply, informationQuestion } from '../domain/ai-request.js';
+import {
+  AiTaskSchema,
+  emptyConstraints,
+  retainConstraints,
+  type AiTask,
+} from '../domain/ai-task.js';
+import { AI_CAPABILITIES, AI_LIMITS, AI_STAGE_POLICY } from '../domain/ai-capabilities.js';
+import { dayInsights, undoChoices } from '../domain/ai-insights.js';
 import { Id, type Trip } from '../domain/schema.js';
 import {
   AiRequestSchema,
@@ -15,14 +23,19 @@ import {
   AiRouteSchema,
   AiProposalSchema,
   AiDiscoverySchema,
+  AiPlaceLookupsSchema,
+  AiLocationUpdateSchema,
   AiPlanError,
   aiContext,
   withDiscovery,
   intentAction,
+  orderAiIntents,
   projectAiProposal,
   type AiRequest,
   type AiProposal,
   type AiProposalInput,
+  type AiLocationUpdate,
+  type AiContext,
 } from '../domain/ai.js';
 import {
   applyTravel,
@@ -41,6 +54,7 @@ const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(valu
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 const terminal = new Set([
   'ready',
+  'answered',
   'clarification',
   'failed',
   'uncertain',
@@ -63,6 +77,7 @@ const JobSchema = z
       'planning',
       'routing',
       'ready',
+      'answered',
       'clarification',
       'failed',
       'uncertain',
@@ -71,7 +86,29 @@ const JobSchema = z
       'applied',
     ]),
     stage: z.enum(['research', 'model', 'lookup', 'information', 'routes', 'finalize', 'done']),
+    modelRounds: z.number().int().min(0).max(AI_LIMITS.modelRounds).default(0),
+    feedback: z.enum(['schedule', 'constraints']).nullable().default(null),
+    task: AiTaskSchema.nullable().default(null),
+    selectedChoice: AiTaskSchema.shape.pendingQuestion
+      .unwrap()
+      .shape.choices.element.nullable()
+      .default(null),
+    locations: z.array(AiLocationUpdateSchema).max(2).default([]),
+    failure: z.enum(['budget', 'usage', 'evidence', 'conflict', 'provider', 'contract']).optional(),
+    trace: z
+      .array(
+        z
+          .object({
+            stage: z.enum(['research', 'model', 'lookup', 'information', 'routes', 'finalize']),
+            outcome: z.enum(['done', 'clarification', 'failed']),
+            milliseconds: z.number().int().min(0).max(120000),
+          })
+          .strict(),
+      )
+      .max(16)
+      .default([]),
     informationRound: z.number().int().min(0).max(1).default(0),
+    informationOnly: z.boolean().default(false),
     informationQueue: z.array(Id).max(2).default([]),
     informationIndex: z.number().int().min(0).max(2).default(0),
     information: z
@@ -89,8 +126,10 @@ const JobSchema = z
       .max(6)
       .default([]),
     routeIndex: z.number().int().min(0).max(6).default(0),
+    routeCalls: z.number().int().min(0).max(6).default(0),
     routes: z.array(AiRouteSchema).max(6).default([]),
     proposalIds: z.array(Id).max(2).default([]),
+    supersededBy: Id.optional(),
   })
   .strict();
 type Job = z.infer<typeof JobSchema>;
@@ -104,6 +143,11 @@ export type AiJobView = {
   expiresAt: string;
   mock: boolean;
   proposals: AiProposal[];
+  task?: AiTask | null;
+  facts?: PlaceInformationUpdate[];
+  insights?: ReturnType<typeof dayInsights>;
+  failure?: Job['failure'];
+  trace?: Job['trace'];
 };
 
 export const previewHash = (trip: Trip) =>
@@ -115,7 +159,7 @@ export class AiService {
     private trips: TripService,
     private providers: AiProviders | undefined,
     private now: () => number = Date.now,
-    private timeoutMs = 40_000,
+    private timeoutMs: number = AI_STAGE_POLICY.timeoutMilliseconds,
   ) {
     this.budget = new AiBudgetService(trips.store, now);
   }
@@ -172,7 +216,7 @@ export class AiService {
   async availability() {
     if (!this.providers) return { enabled: false, mode: 'off' as const };
     const budget = await this.budget.status();
-    return { enabled: budget.enabled, mode: this.providers.mode };
+    return { enabled: budget.enabled, mode: this.providers.mode, capabilities: AI_CAPABILITIES };
   }
   private async readJob(tripId: string, id: string) {
     const item = await this.store.read(this.jobPath(id));
@@ -193,6 +237,12 @@ export class AiService {
       }
     }
     throw new ApiError(409, 'Richiesta AI aggiornata da un altro dispositivo.');
+  }
+  private async supersedeParent(job: Job) {
+    if (!job.request.parentJobId) return;
+    await this.changeJob(job.tripId, job.request.parentJobId, (parent) => {
+      if (parent.status === 'ready' && !parent.supersededBy) parent.supersededBy = job.id;
+    });
   }
   async get(tripId: string, id: string): Promise<AiJobView> {
     // Trip existence is checked even for cached jobs; deleted trips stay private.
@@ -216,16 +266,31 @@ export class AiService {
       id: job.id,
       tripId,
       dayId: job.request.dayId,
-      status: applied ? 'applied' : abandoned ? 'uncertain' : job.status,
+      status: applied
+        ? 'applied'
+        : abandoned
+          ? 'uncertain'
+          : job.supersededBy && job.status === 'ready'
+            ? 'cancelled'
+            : job.status,
       message: applied
         ? 'Proposta applicata al programma condiviso.'
         : abandoned
           ? 'Richiesta interrotta. La spesa deve essere verificata; non viene riavviata automaticamente.'
-          : job.message,
+          : job.supersededBy && job.status === 'ready'
+            ? 'Questa proposta è stata sostituita da una richiesta successiva.'
+            : job.message,
       createdAt: job.createdAt,
       expiresAt: job.expiresAt,
       mock: this.providers?.mode === 'mock',
       proposals,
+      task: job.task,
+      facts: job.information,
+      insights: trip.plan.days.some((d) => d.id === job.request.dayId)
+        ? dayInsights(trip, job.request.dayId, this.now())
+        : undefined,
+      failure: job.failure,
+      trace: job.trace,
     };
   }
   async create(tripId: string, raw: AiRequest, expected?: string) {
@@ -237,9 +302,11 @@ export class AiService {
       const { job } = await this.readJob(tripId, request.id);
       if (job.requestHash !== requestHash)
         throw new ApiError(409, 'ID della richiesta già utilizzato per un’altra modifica.');
+      await this.supersedeParent(job);
       return this.get(tripId, request.id);
     }
-    if (!request.draft && informationQuestion(request.text)) request.purpose = 'information';
+    // Keyword recovery is restricted to records written before structured tasks.
+    // New general requests always go through semantic planning.
     if (!request.draft && request.parentJobId && confirmationReply(request.text)) {
       // Recover the original question through an old misclassified confirmation,
       // but never cross an intervening schedule request or another selected stop.
@@ -253,7 +320,10 @@ export class AiService {
           (request.stepId && parent.request.stepId && request.stepId !== parent.request.stepId)
         )
           break;
-        if (parent.request.purpose === 'information' || informationQuestion(parent.request.text)) {
+        if (
+          !parent.task &&
+          (parent.request.purpose === 'information' || informationQuestion(parent.request.text))
+        ) {
           request.purpose = 'information';
           request.stepId ??= parent.request.stepId;
           break;
@@ -267,7 +337,47 @@ export class AiService {
     if (etag !== expected)
       throw new ApiError(412, 'Il programma è cambiato. Aggiorna prima di chiedere assistenza.');
     const draft = request.draft ? applyTravel(trip, request.draft) : trip;
-    const context = aiContext(draft, request);
+    let task: AiTask | null = null;
+    let selectedChoice: Job['selectedChoice'] = null;
+    let inheritedDiscovery: Job['discovery'] = { places: [], sources: [], notes: [] };
+    if (request.parentJobId) {
+      const { job: parent } = await this.readJob(tripId, request.parentJobId);
+      // Selecting another card does not answer or erase the conversation's
+      // pending question. The semantic planner sees both task and selected stop.
+      if (parent.request.dayId === request.dayId && parent.status !== 'cancelled')
+        task = parent.task;
+      if (
+        task &&
+        ['ready', 'clarification', 'answered', 'applied'].includes(parent.status) &&
+        Date.parse(parent.expiresAt) > this.now()
+      )
+        inheritedDiscovery = parent.discovery;
+      if (request.choiceId) {
+        if (Date.parse(parent.expiresAt) <= this.now())
+          throw new ApiError(409, 'La domanda è scaduta. Richiedi una nuova valutazione.');
+        selectedChoice =
+          task?.pendingQuestion?.choices.find((c) => c.id === request.choiceId) ?? null;
+        if (!selectedChoice)
+          throw new ApiError(409, 'Questa scelta non appartiene alla domanda corrente.');
+        if (selectedChoice.stepId) request.stepId = selectedChoice.stepId;
+      }
+    } else if (request.choiceId)
+      throw new ApiError(409, 'La scelta richiede una domanda precedente.');
+    const context = aiContext(
+      withDiscovery(draft, inheritedDiscovery),
+      request,
+      inheritedDiscovery.places.map((p) => p.id),
+      this.now(),
+    );
+    if (request.purpose === 'information')
+      task = {
+        goals: ['research'],
+        targetStepIds: request.stepId ? [request.stepId] : [],
+        constraints: emptyConstraints(),
+        pendingQuestion: null,
+      };
+    context.task = task;
+    context.selectedChoice = selectedChoice;
     context.conversation = await this.conversation(tripId, request, etag);
     if (request.purpose === 'information') {
       if (request.draft)
@@ -291,6 +401,10 @@ export class AiService {
       createdAt: timestamp,
       expiresAt: new Date(this.now() + 30 * 60_000).toISOString(),
       status: 'queued',
+      task,
+      selectedChoice,
+      informationOnly: request.purpose === 'information',
+      discovery: inheritedDiscovery,
       informationQueue:
         request.purpose === 'information'
           ? draft.plan.steps.flatMap((s) =>
@@ -302,10 +416,7 @@ export class AiService {
           ? request.stepId
             ? 'information'
             : 'model'
-          : request.preference === 'scenic' ||
-              /percors|strad|cammin|luoghi|passegg|punti di interesse|aggiung|sostitui|alternativ|cambia.*(?:tappa|visita)/i.test(
-                request.text,
-              )
+          : request.preference === 'scenic'
             ? 'research'
             : 'model',
       message: 'Richiesta pronta. Il programma resta invariato.',
@@ -316,11 +427,15 @@ export class AiService {
     } catch (error) {
       if (error instanceof ApiError && error.status === 412) {
         const { job: concurrent } = await this.readJob(tripId, job.id);
-        if (concurrent.requestHash === requestHash) return this.get(tripId, job.id);
+        if (concurrent.requestHash === requestHash) {
+          await this.supersedeParent(concurrent);
+          return this.get(tripId, job.id);
+        }
       }
       await this.budget.cancel(job.id).catch(() => {});
       throw error;
     }
+    await this.supersedeParent(job);
     return this.get(tripId, job.id);
   }
   private async bounded<T>(fn: (signal: AbortSignal) => Promise<T>, research = false) {
@@ -350,6 +465,94 @@ export class AiService {
     }
     return enriched;
   }
+  private withLocations(trip: Trip, locations: AiLocationUpdate[]) {
+    const draft = structuredClone(trip);
+    for (const update of locations) {
+      const place = draft.plan.places.find((p) => p.id === update.placeId);
+      if (!place) throw new AiPlanError('invalid', 'Luogo non disponibile.');
+      place.coordinates = update.coordinates;
+    }
+    return draft;
+  }
+  private validateTask(task: AiTask, context: AiContext) {
+    const steps = new Set(context.steps.map((s) => s.id));
+    const places = new Set(context.places.map((p) => p.id));
+    if (
+      [...task.targetStepIds, ...task.constraints.keepStepIds].some((id) => !steps.has(id)) ||
+      [...task.constraints.avoidPlaceIds, ...task.constraints.requireOpenPlaceIds].some(
+        (id) => !places.has(id),
+      ) ||
+      task.pendingQuestion?.choices.some(
+        (c) => (c.stepId && !steps.has(c.stepId)) || (c.placeId && !places.has(c.placeId)),
+      ) ||
+      (task.pendingQuestion &&
+        new Set(task.pendingQuestion.choices.map((c) => c.id)).size !==
+          task.pendingQuestion.choices.length)
+    )
+      throw new AiPlanError(
+        'invalid',
+        'Il contesto della richiesta contiene riferimenti non disponibili.',
+      );
+  }
+  private validateConstraints(before: Trip, after: Trip, job: Job) {
+    const c = job.task?.constraints;
+    if (!c) return;
+    const day = after.plan.days.find((d) => d.id === job.request.dayId)!;
+    const steps = day.stepIds.map((id) => after.plan.steps.find((s) => s.id === id)!);
+    for (const id of c.keepStepIds) {
+      const old = before.plan.steps.find((s) => s.id === id)!,
+        current = steps.find((s) => s.id === id);
+      if (!current || current.start !== old.start || current.end !== old.end)
+        throw new AiPlanError(
+          'invalid',
+          'La proposta non mantiene una tappa che hai chiesto di conservare.',
+        );
+    }
+    if (steps.some((s) => s.kind === 'stop' && c.avoidPlaceIds.includes(s.placeId)))
+      throw new AiPlanError('invalid', 'La proposta include un luogo che hai chiesto di evitare.');
+    const walking = steps.reduce(
+      (sum, s) => sum + (s.kind === 'leg' && s.mode === 'walk' ? s.durationMinutes : 0),
+      0,
+    );
+    if (c.maxWalkingMinutes !== null && walking > c.maxWalkingMinutes)
+      throw new AiPlanError(
+        'invalid',
+        'Il tempo a piedi supera il limite richiesto. Valuta meno tappe o un altro mezzo.',
+      );
+    if (c.finishBy && steps.some((s) => Date.parse(s.end) > Date.parse(c.finishBy!)))
+      throw new AiPlanError('invalid', 'La giornata non termina entro l’orario richiesto.');
+    for (const s of steps.filter(
+      (s) =>
+        s.kind === 'stop' &&
+        (!before.plan.days.find((d) => d.id === job.request.dayId)!.stepIds.includes(s.id) ||
+          before.plan.steps.find((old) => old.id === s.id)?.start !== s.start),
+    )) {
+      if (
+        (c.visitNotBefore && Date.parse(s.start) < Date.parse(c.visitNotBefore)) ||
+        (c.visitNotAfter && Date.parse(s.end) > Date.parse(c.visitNotAfter))
+      )
+        throw new AiPlanError(
+          'invalid',
+          'La visita proposta non rientra nella fascia oraria richiesta.',
+        );
+    }
+    for (const id of c.requireOpenPlaceIds) {
+      const info = after.plan.places.find((p) => p.id === id)?.information;
+      const visits = steps.filter((s) => s.kind === 'stop' && s.placeId === id);
+      if (
+        !visits.length ||
+        !informationFresh(info, day.date, this.now()) ||
+        visits.some(
+          (s) =>
+            visitWindowStatus(info!, s.start, s.end, s.timezone ?? after.plan.timezone) !== 'fits',
+        )
+      )
+        throw new AiPlanError(
+          'invalid',
+          'L’apertura nella fascia richiesta non è verificata. Puoi valutare una visita esterna o un’alternativa.',
+        );
+    }
+  }
   private researchQuery(trip: Trip, placeId: string, dayId: string): EnrichmentQuery {
     const place = trip.plan.places.find((p) => p.id === placeId);
     const c = place?.coordinates;
@@ -373,7 +576,7 @@ export class AiService {
     const step = trip.plan.steps.find((s) => s.id === stepId);
     if (
       step?.kind !== 'stop' ||
-      !['visit', 'meal'].includes(step.category) ||
+      !['visit', 'meal', 'free-time'].includes(step.category) ||
       !trip.plan.days.find((d) => d.id === dayId)?.stepIds.includes(stepId)
     )
       throw new AiPlanError(
@@ -384,12 +587,16 @@ export class AiService {
     return step.placeId;
   }
   private collectRoutes(trip: Trip, job: Job): RouteQuery[] {
-    trip = this.withInformation(withDiscovery(trip, job.discovery), job.information);
+    trip = this.withLocations(
+      this.withInformation(withDiscovery(trip, job.discovery), job.information),
+      job.locations,
+    );
     const queue: RouteQuery[] = [];
     const context = aiContext(
       job.request.draft ? applyTravel(trip, job.request.draft) : trip,
       job.request,
       job.discovery.places.map((p) => p.id),
+      this.now(),
     );
     const allowed = new Set(context.places.map((p) => p.id));
     const add = (query: RouteQuery) => {
@@ -439,10 +646,40 @@ export class AiService {
   }
   private proposal(trip: Trip, job: Job, index: number): AiProposal {
     const original = trip;
-    trip = this.withInformation(withDiscovery(trip, job.discovery), job.information);
+    trip = this.withLocations(
+      this.withInformation(withDiscovery(trip, job.discovery), job.information),
+      job.locations,
+    );
     const option = job.output!.options[index];
     let draft = job.request.draft ? applyTravel(trip, job.request.draft) : trip;
     const commands: TravelCommand[] = job.request.draft ? [job.request.draft] : [];
+    if (job.output?.historyRequest) {
+      if (
+        index ||
+        option.actions.length ||
+        option.routes.length ||
+        job.information.length ||
+        job.locations.length ||
+        job.request.draft ||
+        !undoChoices(original, job.request.dayId).some(
+          (h) => h.id === job.output!.historyRequest && h.available,
+        )
+      )
+        throw new AiPlanError(
+          'invalid',
+          'L’annullamento richiede una modifica disponibile della giornata e una proposta separata.',
+        );
+      const action = { type: 'undo' as const, historyId: job.output.historyRequest };
+      const command = {
+        id: `${hash(job.id).slice(0, 40)}-undo`,
+        action,
+        routes: [],
+        expected: preconditions(draft, action),
+        at: job.createdAt,
+      };
+      draft = applyTravel(draft, command);
+      commands.push(command);
+    }
     for (const [i, intent] of option.actions.entries()) {
       const action = intentAction(
         draft,
@@ -538,6 +775,7 @@ export class AiService {
             return step?.kind === 'stop' && step.placeId === update.placeId;
           }),
       ),
+      locations: job.locations,
       places: job.discovery.places.filter(
         (p) =>
           commands.some(
@@ -546,6 +784,7 @@ export class AiService {
       ),
       sources: job.discovery.sources.filter(
         (source) =>
+          job.locations.some((l) => l.sourceIds.includes(source.id)) ||
           option.sourceIds.includes(source.id) ||
           job.discovery.places.some(
             (p) =>
@@ -560,6 +799,7 @@ export class AiService {
       citations: [...citations, ...routes.flatMap((r) => r.citations)].slice(0, 20),
     };
     const projected = projectAiProposal(original, proposal);
+    this.validateConstraints(original, projected, job);
     for (const update of proposal.information ?? []) {
       const day = projected.plan.days.find((d) => d.id === job.request.dayId)!;
       for (const step of projected.plan.steps.filter(
@@ -647,10 +887,24 @@ export class AiService {
       if (error instanceof ApiError && error.status === 409) return this.get(tripId, id);
       throw error;
     }
+    const stageStarted = performance.now();
     const update = async (fn: (value: Job) => void) =>
       this.changeJob(tripId, id, (j) => {
         if (j.owner !== owner || j.status !== 'running') return;
+        j.task = job.task;
+        j.modelRounds = job.modelRounds;
+        j.locations = job.locations;
         fn(j);
+        if (job.stage !== 'done')
+          j.trace.push({
+            stage: job.stage,
+            outcome: ['failed', 'uncertain'].includes(j.status)
+              ? 'failed'
+              : (j.status as Job['status']) === 'clarification'
+                ? 'clarification'
+                : 'done',
+            milliseconds: Math.min(120000, Math.round(performance.now() - stageStarted)),
+          });
         delete j.owner;
         delete j.startedAt;
       });
@@ -676,24 +930,44 @@ export class AiService {
           j.status = 'planning';
         });
       } else if (job.stage === 'model') {
-        const enriched = this.withInformation(withDiscovery(trip, job.discovery), job.information);
+        if (job.modelRounds >= AI_LIMITS.modelRounds)
+          throw new AiPlanError(
+            'invalid',
+            'Il limite di valutazioni è raggiunto. Dividi la richiesta in obiettivi più piccoli.',
+          );
+        const enriched = this.withLocations(
+          this.withInformation(withDiscovery(trip, job.discovery), job.information),
+          job.locations,
+        );
         const context = aiContext(
           job.request.draft ? applyTravel(enriched, job.request.draft) : enriched,
           job.request,
           job.discovery.places.map((p) => p.id),
+          this.now(),
         );
+        context.task = job.task;
+        context.selectedChoice = job.selectedChoice;
+        context.planningFeedback = job.feedback
+          ? 'La proposta precedente non rispetta il programma o i vincoli richiesti. Usa tempi misurati e calcoli locali per correggerla; se non è fattibile, spiega il conflitto senza inventare una soluzione.'
+          : null;
+        context.routeResults = job.routes.map((route) => ({
+          fromPlaceId: route.fromPlaceId,
+          toPlaceId: route.toPlaceId,
+          walkingMinutes: route.durationMinutes,
+          pauseMinutes: route.pois.reduce((sum, p) => sum + p.visitMinutes, 0),
+          poiPlaceIds: route.pois.map((p) => p.placeId),
+          estimate: route.estimate,
+        }));
+        context.toolsAvailable = {
+          discovery: !!provider.lookup && job.lookupRound === 0,
+          information: !!provider.informationAvailable && job.informationRound === 0,
+          routing: true,
+        };
         context.researchNotes = job.discovery.notes;
         context.lookupAvailable =
-          job.request.purpose !== 'information' &&
-          job.lookupRound === 0 &&
-          job.informationRound === 0 &&
-          !!provider.lookup;
+          job.request.purpose !== 'information' && job.lookupRound === 0 && !!provider.lookup;
         context.conversation = await this.conversation(tripId, job.request, etag);
-        const operation = job.informationRound
-          ? `${id}-model-information`
-          : job.lookupRound
-            ? `${id}-model-1`
-            : `${id}-model`;
+        const operation = job.modelRounds ? `${id}-model-${job.modelRounds}` : `${id}-model`;
         await this.budget.reserve(id, {
           id: operation,
           fingerprint: hash(context),
@@ -703,39 +977,70 @@ export class AiService {
           this.bounded((signal) => provider.plan(context, signal, operation)),
         );
         const output = AiModelOutputSchema.parse(raw);
+        output.options.forEach((option) => {
+          option.actions = orderAiIntents(enriched, option.actions);
+        });
+        const task = output.task ?? {
+          goals: output.historyRequest
+            ? ['undo']
+            : output.informationRequests.length || output.placeInformationRequests.length
+              ? ['research']
+              : output.options.length || output.lookups.length
+                ? ['propose']
+                : ['answer'],
+          targetStepIds: output.informationRequests.length
+            ? output.informationRequests
+            : job.request.stepId
+              ? [job.request.stepId]
+              : [],
+          constraints: job.task?.constraints ?? emptyConstraints(),
+          pendingQuestion: output.clarification
+            ? { question: output.clarification, choices: [] }
+            : null,
+        };
+        if (job.modelRounds > 0 && job.task)
+          task.constraints = retainConstraints(job.task.constraints, task.constraints);
+        this.validateTask(task, context);
+        job.task = task;
+        if (
+          !!task.pendingQuestion !== !!output.clarification ||
+          (output.clarification &&
+            (output.options.length ||
+              output.lookups.length ||
+              output.informationRequests.length ||
+              output.placeInformationRequests.length ||
+              output.locationRequests.length ||
+              output.historyRequest))
+        )
+          throw new AiPlanError(
+            'invalid',
+            'La domanda di chiarimento deve precedere ricerche e modifiche.',
+          );
+        const writes =
+          output.options.some((o) => o.actions.length || o.routes.length) ||
+          output.locationRequests.length ||
+          output.historyRequest;
+        if (writes && !task.goals.some((g) => ['propose', 'compare', 'undo'].includes(g)))
+          throw new AiPlanError(
+            'invalid',
+            'Una risposta informativa non può modificare il programma.',
+          );
+        if (output.historyRequest && (!task.goals.includes('undo') || output.options.length !== 1))
+          throw new AiPlanError('invalid', 'Scegli una modifica dalla cronologia da annullare.');
+        job.modelRounds++;
         if (job.request.purpose === 'information') {
           if (
             output.options.length ||
             output.lookups.length ||
+            output.locationRequests.length ||
+            output.historyRequest ||
+            output.placeInformationRequests.length ||
             (output.informationRequests.length && output.clarification)
           )
             throw new AiPlanError(
               'invalid',
               'Una richiesta di informazioni non può modificare il programma o calcolare percorsi.',
             );
-          if (output.informationRequests.length) {
-            const ids = [
-              ...new Set(
-                output.informationRequests.map((stepId) =>
-                  this.informationTarget(trip, stepId, job.request.dayId),
-                ),
-              ),
-            ];
-            await update((j) => {
-              j.output = output;
-              j.informationQueue = ids;
-              if (output.informationRequests.length === 1)
-                j.request.stepId = output.informationRequests[0];
-              j.stage = 'information';
-              j.status = 'planning';
-            });
-            return this.get(tripId, id);
-          }
-        } else if (output.informationRequests.length) {
-          throw new AiPlanError(
-            'invalid',
-            'La ricerca delle informazioni deve essere distinta dalla modifica del programma.',
-          );
         }
         if (output.lookups.length) {
           if (!context.lookupAvailable)
@@ -743,7 +1048,14 @@ export class AiService {
               'invalid',
               'La ricerca disponibile è terminata. Specifica il luogo o scegli uno dei risultati trovati.',
             );
-          if (output.options.length || output.clarification)
+          if (
+            output.options.length ||
+            output.clarification ||
+            output.informationRequests.length ||
+            output.placeInformationRequests.length ||
+            output.locationRequests.length ||
+            output.historyRequest
+          )
             throw new AiPlanError('invalid', 'La ricerca di un luogo deve precedere la proposta.');
           await update((j) => {
             j.output = output;
@@ -753,21 +1065,113 @@ export class AiService {
           });
           return this.get(tripId, id);
         }
+        for (const mapping of output.locationRequests) {
+          const target = context.places.find((p) => p.id === mapping.placeId);
+          const candidate = job.discovery.places.find((p) => p.id === mapping.candidateId);
+          const coords = candidate?.coordinates;
+          const sourceIds =
+            candidate?.sourceIds.filter((id) =>
+              job.discovery.sources.some((s) => s.id === id && s.status.startsWith('verified_')),
+            ) ?? [];
+          if (
+            !target ||
+            !context.steps.some(
+              (s) =>
+                s.kind === 'stop' &&
+                'placeId' in s &&
+                s.placeId === target.id &&
+                ['visit', 'meal', 'free-time'].includes(s.category),
+            ) ||
+            !candidate ||
+            !coords ||
+            !sourceIds.length ||
+            Date.parse(coords.verifiedOn) > this.now() ||
+            this.now() - Date.parse(coords.verifiedOn) > 365 * 24 * 3600_000
+          )
+            throw new AiPlanError(
+              'invalid',
+              'La posizione proposta richiede un luogo pubblico e coordinate da una fonte verificata.',
+            );
+          const update = {
+            placeId: target.id,
+            candidateId: candidate.id,
+            candidateName: candidate.name.slice(0, 160),
+            coordinates: coords,
+            sourceIds,
+          };
+          if (!job.locations.some((l) => l.placeId === update.placeId)) job.locations.push(update);
+          else if (
+            JSON.stringify(job.locations.find((l) => l.placeId === update.placeId)) !==
+            JSON.stringify(update)
+          )
+            throw new AiPlanError(
+              'invalid',
+              'La posizione del luogo è stata individuata in modo incoerente.',
+            );
+        }
+        if (job.locations.length > 2)
+          throw new AiPlanError(
+            'invalid',
+            'Sono richieste troppe posizioni nella stessa richiesta.',
+          );
+        if (
+          output.placeInformationRequests.some(
+            (id) => !job.discovery.places.some((p) => p.id === id),
+          )
+        )
+          throw new AiPlanError(
+            'invalid',
+            'La ricerca deve usare un luogo pubblico individuato nelle fonti.',
+          );
+        const requestedInformation = [
+          ...output.informationRequests.map((stepId) =>
+            this.informationTarget(trip, stepId, job.request.dayId),
+          ),
+          ...output.placeInformationRequests,
+        ];
+        if (
+          job.informationRound &&
+          requestedInformation.some(
+            (placeId) =>
+              !job.information.some((u) => u.placeId === placeId) &&
+              !informationFresh(
+                enriched.plan.places.find((p) => p.id === placeId)?.information,
+                context.day.date,
+                this.now(),
+              ),
+          )
+        )
+          throw new AiPlanError(
+            'invalid',
+            'La ricerca disponibile è terminata. Richiedi le altre informazioni separatamente.',
+          );
+        if (requestedInformation.length && !provider.informationAvailable)
+          throw new AiPlanError(
+            'invalid',
+            'La ricerca web non è disponibile. Puoi consultare le informazioni già salvate e le fonti della tappa.',
+          );
         if (job.informationRound === 0 && provider.informationAvailable && provider.enrich) {
           const ids = [
-            ...new Set(
-              output.options.flatMap((o) =>
+            ...new Set([
+              ...requestedInformation,
+              ...output.options.flatMap((o) =>
                 o.actions
                   .filter((a) => a.type === 'add')
                   .flatMap((a) => (a.placeId ? [a.placeId] : [])),
               ),
-            ),
-          ].slice(0, 2);
+            ]),
+          ];
+          if (ids.length > 2)
+            throw new AiPlanError(
+              'invalid',
+              'Posso ricercare al massimo due luoghi per richiesta. Scegli quelli prioritari.',
+            );
           if (ids.length) {
             // Validate public target identity before persisting a paid research stage.
             ids.forEach((placeId) => this.researchQuery(enriched, placeId, job.request.dayId));
             await update((j) => {
               j.output = output;
+              j.informationOnly = !writes && !job.request.draft;
               j.informationQueue = ids;
               j.stage = 'information';
               j.status = 'planning';
@@ -776,17 +1180,99 @@ export class AiService {
           }
         }
         job.output = output;
-        const queue = this.collectRoutes(trip, job);
+        let queue: RouteQuery[];
+        try {
+          queue = this.collectRoutes(trip, job);
+        } catch (error) {
+          if (
+            error instanceof TravelError &&
+            job.modelRounds < AI_LIMITS.modelRounds &&
+            !job.informationOnly &&
+            !output.historyRequest
+          ) {
+            await update((j) => {
+              j.output = output;
+              j.feedback = 'schedule';
+              j.stage = 'model';
+              j.status = 'planning';
+              j.message = 'Rivedo le modifiche per conservare gli impegni fissi…';
+            });
+            return this.get(tripId, id);
+          }
+          throw error;
+        }
+        // Recover missing public locations before any routing dispatch. The
+        // traveler need not know coordinates even if the planner omitted lookup.
+        if (
+          queue.length &&
+          provider.validateRoute &&
+          context.lookupAvailable &&
+          job.modelRounds < AI_LIMITS.modelRounds
+        ) {
+          const missing = [
+            ...new Set(queue.flatMap((q) => [q.fromPlaceId, q.toPlaceId, ...q.poiPlaceIds])),
+          ].filter(
+            (id) =>
+              !context.places.find((p) => p.id === id)?.location.hasCoordinates &&
+              !job.locations.some((location) => location.placeId === id),
+          );
+          if (
+            missing.length &&
+            missing.length <= 2 &&
+            missing.every((id) =>
+              context.steps.some(
+                (s) =>
+                  s.kind === 'stop' &&
+                  'placeId' in s &&
+                  s.placeId === id &&
+                  ['visit', 'meal', 'free-time'].includes(s.category),
+              ),
+            )
+          ) {
+            const lookups = AiPlaceLookupsSchema.parse(
+              missing.map((id) => ({
+                name: context.places.find((p) => p.id === id)!.name,
+                area: context.day.destinations.join(', ').slice(0, 80),
+              })),
+            );
+            await update((j) => {
+              j.output = { ...output, lookups };
+              j.stage = 'lookup';
+              j.status = 'planning';
+              j.message =
+                'Individuo la posizione del luogo nelle fonti pubbliche prima di calcolare il percorso…';
+            });
+            return this.get(tripId, id);
+          }
+        }
         await update((j) => {
           j.output = output;
-          j.queue = queue;
+          j.queue = queue.filter(
+            (query) =>
+              !job.routes.some(
+                (r) =>
+                  r.fromPlaceId === query.fromPlaceId &&
+                  r.toPlaceId === query.toPlaceId &&
+                  JSON.stringify(r.pois.map((p) => p.placeId)) ===
+                    JSON.stringify(query.poiPlaceIds),
+              ),
+          );
+          j.routeIndex = 0;
+          j.feedback = null;
           j.stage =
             output.clarification || !output.options.length
               ? 'done'
-              : queue.length
+              : j.queue.length
                 ? 'routes'
                 : 'finalize';
-          j.status = j.stage === 'done' ? 'clarification' : queue.length ? 'routing' : 'planning';
+          j.status =
+            j.stage === 'done'
+              ? output.clarification
+                ? 'clarification'
+                : 'answered'
+              : j.queue.length
+                ? 'routing'
+                : 'planning';
           j.message = output.clarification ?? output.message;
         });
         if (output.clarification || !output.options.length) await this.budget.finish(id);
@@ -836,7 +1322,7 @@ export class AiService {
         if (!provider.informationAvailable || !provider.enrich || !provider.enrichmentBound)
           throw new AiPlanError('invalid', 'Ricerca delle informazioni non disponibile.');
         const placeId = job.informationQueue[job.informationIndex];
-        const enriched = withDiscovery(trip, job.discovery);
+        const enriched = this.withLocations(withDiscovery(trip, job.discovery), job.locations);
         const query = this.researchQuery(enriched, placeId, job.request.dayId);
         const cachePath = `ai/information/${hash({ version: 1, query })}.json`;
         const cached = await this.store.read(cachePath);
@@ -863,7 +1349,7 @@ export class AiService {
           const value = await this.budget.dispatch(id, operation, () =>
             this.bounded((signal) => provider.enrich!(query, signal, operation), true),
           );
-          if (!value && job.request.purpose !== 'information') {
+          if (!value && !job.informationOnly) {
             // Known charges are already settled. Missing optional facts must not
             // prevent a separately sourced place/route proposal. Never retry.
             await update((j) => {
@@ -892,54 +1378,78 @@ export class AiService {
           }
         }
         const unchanged =
-          job.request.purpose === 'information' &&
-          JSON.stringify(existing) === JSON.stringify(information);
+          job.informationOnly && JSON.stringify(existing) === JSON.stringify(information);
         await update((j) => {
           j.information.push({ placeId, information: information! });
           j.informationIndex++;
           const done = j.informationIndex >= j.informationQueue.length;
           j.informationRound = done ? 1 : 0;
-          j.stage = done
-            ? j.request.purpose === 'information'
-              ? 'finalize'
-              : 'model'
-            : 'information';
+          j.stage = done ? (j.informationOnly ? 'finalize' : 'model') : 'information';
           j.status = 'planning';
-          if (done && j.request.purpose === 'information')
-            j.output = {
+          const saveable = j.information.some((u) =>
+            trip.plan.days
+              .find((d) => d.id === j.request.dayId)!
+              .stepIds.some((id) => {
+                const s = trip.plan.steps.find((s) => s.id === id)!;
+                return s.kind === 'stop' && s.placeId === u.placeId;
+              }),
+          );
+          if (done && j.informationOnly)
+            j.output = AiModelOutputSchema.parse({
               message: unchanged
                 ? 'Le informazioni sono già aggiornate per questa data. Nessuna nuova ricerca o modifica.'
-                : 'Ho raccolto le informazioni del luogo. Controlla fonti, data e prezzi prima di confermare.',
-              clarification: unchanged
-                ? 'Le informazioni sono già aggiornate per questa data.'
-                : null,
+                : saveable
+                  ? 'Ho raccolto le informazioni del luogo. Controlla fonti, data e prezzi prima di confermare.'
+                  : 'Ho raccolto le informazioni del luogo. Consulta fonti, data e prezzi qui sotto; il programma resta invariato.',
+              clarification: null,
               lookups: [],
               informationRequests: [],
-              options: unchanged
-                ? []
-                : [
-                    {
-                      title: 'Aggiorna le informazioni della tappa',
-                      explanation:
-                        'Aggiunge informazioni consultate nelle fonti pubbliche. Orari del programma, prenotazioni e stima originale dei costi restano invariati.',
-                      actions: [],
-                      routes: [],
-                      sourceIds: [],
-                    },
-                  ],
-            };
-          if (unchanged) {
+              options:
+                unchanged || !saveable
+                  ? []
+                  : [
+                      {
+                        title: 'Aggiorna le informazioni della tappa',
+                        explanation:
+                          'Aggiunge informazioni consultate nelle fonti pubbliche. Orari del programma, prenotazioni e stima originale dei costi restano invariati.',
+                        actions: [],
+                        routes: [],
+                        sourceIds: [],
+                      },
+                    ],
+            });
+          if (
+            done &&
+            j.informationOnly &&
+            (!saveable ||
+              (unchanged &&
+                j.information.every(
+                  (u) =>
+                    JSON.stringify(
+                      enriched.plan.places.find((p) => p.id === u.placeId)?.information,
+                    ) === JSON.stringify(u.information),
+                )))
+          ) {
             j.stage = 'done';
-            j.status = 'clarification';
+            j.status = 'answered';
             j.message = j.output!.message;
           }
         });
-        if (unchanged) await this.budget.finish(id);
+        const after = (await this.readJob(tripId, id)).job;
+        if (after.stage === 'done') await this.budget.finish(id);
       } else if (job.stage === 'routes') {
+        if (job.routeCalls >= AI_LIMITS.routes)
+          throw new AiPlanError(
+            'invalid',
+            'Il limite di percorsi è raggiunto. Scegli una modifica più piccola.',
+          );
         const query = job.queue[job.routeIndex];
-        const enriched = this.withInformation(withDiscovery(trip, job.discovery), job.information);
+        const enriched = this.withLocations(
+          this.withInformation(withDiscovery(trip, job.discovery), job.information),
+          job.locations,
+        );
         provider.validateRoute?.(query, enriched);
-        const operation = `${id}-route-${job.routeIndex}`;
+        const operation = `${id}-route-${job.routeCalls}`;
         await this.budget.reserve(id, {
           id: operation,
           fingerprint: hash(query),
@@ -961,25 +1471,44 @@ export class AiService {
           );
         await update((j) => {
           j.routes.push(route);
+          j.routeCalls++;
           j.routeIndex++;
           j.stage = j.routeIndex >= j.queue.length ? 'finalize' : 'routes';
           j.status = 'routing';
         });
       } else if (job.stage === 'finalize') {
-        const proposals: AiProposal[] = [];
-        for (let i = 0; i < job.output!.options.length; i++) {
-          const proposal = this.proposal(trip, job, i);
+        let proposals: AiProposal[];
+        try {
+          proposals = job.output!.options.map((_, index) => this.proposal(trip, job, index));
+        } catch (error) {
+          if (
+            (error instanceof TravelError || error instanceof AiPlanError) &&
+            job.modelRounds < AI_LIMITS.modelRounds &&
+            !job.informationOnly &&
+            !job.output!.historyRequest &&
+            job.task?.goals.some((g) => ['propose', 'compare'].includes(g))
+          ) {
+            await update((j) => {
+              j.feedback = 'constraints';
+              j.stage = 'model';
+              j.status = 'planning';
+              j.message = 'Confronto i tempi verificati con i vincoli e rivedo la proposta…';
+            });
+            return this.get(tripId, id);
+          }
+          throw error;
+        }
+        for (const proposal of proposals) {
           try {
             await this.store.write(this.proposalPath(proposal.id), encode(proposal), 'create');
           } catch (error) {
             if (!(error instanceof ApiError && error.status === 412)) throw error;
           }
-          proposals.push(proposal);
         }
         await this.budget.finish(id);
         await update((j) => {
           j.proposalIds = proposals.map((p) => p.id);
-          j.status = 'ready';
+          j.status = proposals.length ? 'ready' : 'answered';
           j.stage = 'done';
           j.message = job.output!.message;
         });
@@ -1033,6 +1562,17 @@ export class AiService {
       }
       await update((j) => {
         j.status = uncertain ? 'uncertain' : 'failed';
+        j.failure = uncertain
+          ? 'usage'
+          : error instanceof AiBudgetError
+            ? 'budget'
+            : error instanceof z.ZodError
+              ? 'contract'
+              : error instanceof TravelError || (error instanceof ApiError && error.status === 412)
+                ? 'conflict'
+                : error instanceof AiPlanError
+                  ? 'evidence'
+                  : 'provider';
         j.message =
           error instanceof AiBudgetError ||
           error instanceof AiPlanError ||
@@ -1076,6 +1616,7 @@ export class AiService {
     const { job } = await this.readJob(tripId, proposal.jobId);
     if (
       !['ready', 'applying'].includes(job.status) ||
+      job.supersededBy ||
       !job.proposalIds.includes(proposalId) ||
       Date.parse(proposal.expiresAt) <= this.now()
     )
@@ -1087,7 +1628,7 @@ export class AiService {
       throw new ApiError(409, 'L’anteprima non coincide con la proposta.');
     try {
       await this.changeJob(tripId, job.id, (j) => {
-        if (!['ready', 'applying'].includes(j.status))
+        if (!['ready', 'applying'].includes(j.status) || j.supersededBy)
           throw new ApiError(409, 'La proposta è stata annullata.');
         j.status = 'applying';
         j.message = 'Applico la proposta al programma condiviso…';

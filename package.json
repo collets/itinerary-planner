@@ -21,7 +21,8 @@
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
     "format": "prettier --write .",
     "ai:demo": "node --import tsx scripts/ai-demo.ts",
-    "ai:admin": "node --import tsx scripts/ai-admin.ts"
+    "ai:admin": "node --import tsx scripts/ai-admin.ts",
+    "ai:eval": "vitest run tests/ai-foundation.test.ts tests/ai-foundation-ui.test.tsx --reporter=default --reporter=json --outputFile=local-data/ai-evaluation-contracts.json"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",

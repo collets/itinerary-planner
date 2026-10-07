@@ -242,6 +242,7 @@ describe('AI context, proposals and durable stages', () => {
     const job = await ready({
       ...request('replace-middle', 'Sostituisci il museo con un’altra visita'),
       stepId: 'museum',
+      preference: 'scenic',
     });
     expect(job.status, job.message).toBe('ready');
     expect(discover).toHaveBeenCalledOnce();
@@ -530,7 +531,6 @@ describe('AI context, proposals and durable stages', () => {
       'aggiungi una tappa al castello di cracovia nel pomeriggio',
     );
     let job = await ai.create('example-trip', input, original.etag);
-    job = await ai.advance('example-trip', job.id); // nearby research
     job = await ai.advance('example-trip', job.id); // requests named lookup
     expect(job.status).toBe('planning');
     expect(lookup).not.toHaveBeenCalled();

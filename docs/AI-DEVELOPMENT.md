@@ -15,12 +15,17 @@ proposal widgets with schedule comparisons, street names, POIs and sources.
 Each stop card and detail page has a **Chiedi aiuto** action. Opening the header
 assistant while viewing an active stop also selects that stop. **Sostituisci la
 tappa** and **Accorcia la visita** prepare an editable request; sending remains
-explicit. Conversations are kept separately for each day or selected step.
+explicit. Conversations are shared within each day, including when the selected
+stop changes. Older device caches remain readable through a migration fallback.
 `Adatta → Mostra anteprima → Suggerisci percorso e luoghi` includes the unsaved
 manual change in the same proposal. Follow-up turns use current itinerary data
-and up to three brief prior turns.
+and up to three brief prior turns, plus persisted task goals, targets, constraints
+and pending clarification choices. A short answer such as “sì grazie” goes through
+the semantic planner with that task. Selectable choices submit the persisted
+choice ID; the server validates ownership before starting a new budget run.
 
-The model can suggest delay, timing, skip, reorder within one day, or add a stop
+The model can answer without a proposal, research up to two public places,
+compare alternatives, propose a history-based undo, or suggest delay, timing, skip, reorder within one day, or add a stop
 at an existing/discovered public place. Every change is validated server-side;
 completed, fixed and booked activities remain protected. It cannot buy/cancel
 bookings, change costs, read ticket documents or write directly to the trip.
@@ -28,7 +33,9 @@ Replacement uses a skip and add in one approved batch, with sourced connections
 before and after the new stop. Temporary bypass routes needed to validate the
 intermediate skip are excluded from the final route preview.
 Approval applies the full batch through one conditional trip write and one travel
-history entry. A retry does not apply it twice. A stale or expired proposal cannot
+history entry, including combined information/location and schedule changes.
+A retry does not apply it twice. A corrected conversation supersedes its parent's
+unapplied proposal even if the trip version has not changed. A stale or expired proposal cannot
 overwrite newer changes. Undo restores the schedule; unused catalog records and
 archived steps may remain, as with manual travel editing. Financial history is
 separate and never undone with itinerary changes.
@@ -62,9 +69,12 @@ requests, including routing/research. Restart ordinary `pnpm dev` without an
 ## Provider boundaries and limitations
 
 `AiService` is a bounded application orchestrator, not an unrestricted agent loop.
-Stages persist independently: optional nearby research, a structured Responses call,
-one optional named-place lookup round and one further Responses call, up to six
-logical route requests, then validated proposal construction. Each
+Stages persist independently: optional nearby research, up to three structured
+Responses reasoning passes, one named-place lookup round, one information round
+for up to two places, up to six logical route requests, then validated proposal
+construction. The planner chooses typed research/location/history requests and
+subgoals; the application executes them through fixed authenticated stages.
+This is strict JSON orchestration, not an unrestricted native tool loop. Each
 provider stage has a 40-second timeout under the existing 60-second Vercel Function
 limit. An explicit authenticated POST advances one stage; GET only reads progress.
 No queue, database or new runtime is required for the pilot.
@@ -115,11 +125,11 @@ place names or request a lookup of private accommodation. The model is instructe
 to extract only public landmarks; server validation blocks URL/search operators,
 not every possible semantic disclosure.
 
-A named lookup is persisted before dispatch and can run only once. The second
-model call has a separate durable operation ID and must fit the original request,
-daily and monthly limits, including the settled first charge. Each model pass
+A named lookup is persisted before dispatch and can run only once. Every further
+reasoning pass has a separate durable operation ID and must fit the original request,
+daily and monthly limits, including earlier settled charges. Each model pass
 reserves the entire configured context/output bound. An insufficient remainder
-blocks the second pass; there is no automatic retry, budget increase or recursive
+blocks further reasoning; there is no automatic retry, budget increase or recursive
 search loop. Older saved outputs default to no lookup; the provider's strict
 schema requires an explicit `lookups` array. Broader time windows such as
 "nel pomeriggio" can produce estimated visit times/durations for review.
@@ -339,18 +349,16 @@ independent penetration test.
 ## Sourced stop information
 
 New/replacement stops can run one bounded information round (maximum two public
-places), then replan once with date-specific opening windows. Existing visit/meal
+places), then replan within the three-pass ceiling with date-specific opening windows. Existing visit/meal/free-time
 stops offer **Aggiorna informazioni con AI**. The shortcut prepares an explicit
-request; it does not spend until sent. Selected-stop requests such as “Controlla
-orari e prezzi” or “Dammi informazioni sui prezzi e gli orari” also select the
-information flow when no schedule change is asked. General chat selects existing
-public stop IDs using a bounded `informationRequests` output, with no actions or
-routes. Its strict provider schema enumerates only the active visit/meal stop IDs
-from that day's context, so catalog place IDs cannot be returned as stop IDs.
-In schedule mode this array must be empty. Replies such as “si grazie” inherit
-this intent through up to three turns;
-an intervening schedule request or different selected stop stops that inheritance.
-Old failed confirmations are recoverable without replaying their provider calls.
+request; it does not spend until sent. Explicit information shortcuts bypass the
+initial planner when the public stop is selected. General chat uses semantic task
+goals instead of keyword routing. The planner selects active public stop IDs in
+`informationRequests`, or evidenced unscheduled candidate IDs in
+`placeInformationRequests`. Its strict provider schema distinguishes those IDs.
+Research can accompany a schedule proposal. Pending tasks survive server restart,
+brief confirmations and switching the selected stop within the day. Only legacy
+saved records without a task use the previous confirmation compatibility helper.
 Information-only requests never alter the schedule, reservations or original
 cost estimate, including for booked/completed activities. Every overlay is
 reviewed before saving, with inline citations and a check date. Original manual
@@ -402,6 +410,46 @@ call; a repeated information update reports that it is already current.
 Approval includes an information widget using the same renderer as stop details;
 financial amounts remain untouched. General address geocoding, live booking
 availability and private accommodation research remain outside this capability.
+
+## Phase 0–2 foundation
+
+The capability registry in `src/domain/ai-capabilities.ts` records permissions,
+limits, input/output validators, evidence, effects and fallback contracts. The
+planner only sees read/propose permissions; apply remains a separate authenticated
+action. Diagnostics expose fixed stage names, outcome categories and bounded
+elapsed milliseconds. They contain no raw provider errors or conversations.
+
+`dayInsights` calculates remaining activities in the trip timezone, recorded
+progress, walking minutes, gaps, route/booking/opening warnings and group estimates.
+Known base costs are counted once per cost record; optional costs and unlinked
+expenses are excluded. Missing prices keep the total incomplete. Dated saved FX
+converts estimates; actual payments (including archived visits) appear only in
+the local authenticated widget and are excluded from model context. Research
+prices are saved as an information overlay and never added automatically to
+financial estimates. Remaining activity minutes exclude idle gaps and queues.
+
+Hard constraints support unchanged selected stops, avoided places, an evidenced
+open visit, a maximum total day walking time, finishing deadline and visit time
+window. Preferences remain advisory. The server checks the complete projected
+change. Safe duration reductions run before delays; schedule conflicts or measured
+route conflicts can trigger another bounded reasoning pass. Routes already
+measured for identical endpoints and ordered POIs are reused. Internal passes
+cannot relax hard constraints; a new user turn can request a change to them.
+Each new pass still reserves its full quote and consumes the existing operation
+and request budget. Unknown usage never triggers reconsideration or a retry.
+
+Undo choices are drawn from the selected day's available history and current
+fingerprints. Undo is one previewed command, cannot be mixed with other edits,
+and does not invoke research or routing. Sourced location overlays preserve an
+existing manual stop/place ID and are undone separately from information or
+schedule edits. Coordinates describe a sourced building point unless a visitor
+entrance is independently verified.
+
+See [evaluation coverage and limitations](AI-EVALUATION.md) for the scripted
+conversation suite and the separate live quality gate. Broader restaurant/shop
+coverage needs a reviewed place provider; the current Wikipedia adapter is
+useful for public landmarks but is not a general geocoder. Cross-day editing,
+transit, weather, private documents and external transactions remain later phases.
 
 Billing/context and tool contracts checked on 2026-10-07:
 [Responses built-in call ceiling](https://developers.openai.com/api/reference/python/resources/responses/methods/create),
