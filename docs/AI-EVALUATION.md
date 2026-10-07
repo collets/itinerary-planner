@@ -25,8 +25,8 @@ These cases verify what the application does with correct or unsafe decisions.
 prompt paired with a scripted response is a regression contract, not a language
 quality score. No live success rate is claimed by this suite.
 
-Local verification on 2026-10-07: `pnpm check` passed 229 tests, the native
-Node server smoke and production build. The foundation command passed 82 tests
+Local verification on 2026-10-07 after live-test fixes: `pnpm check` passed 236 tests, the native
+Node server smoke and production build. The foundation command passed 85 tests
 (60 canonical cases plus integration/UI regressions). All 24 mobile browser
 checks passed across Chromium and WebKit. On this Debian workstation WebKit
 used the existing temporary shared libraries/browser wrapper; CI installs the
@@ -59,7 +59,32 @@ resolved without redispatch or a claim of confirmed invoice usage. The existing
 $1 pilot remains the testing allowance; no caps or provider prices were changed.
 The first new manual-stop information acceptance request failed JSON parsing
 before research, with its known $0.001071 charge settled and no remaining hold.
-The test script disabled AI. Broader live acceptance remains outstanding.
+The test script disabled AI before diagnosis. A more explicit JSON instruction
+then allowed the information conversation to proceed; this does not establish
+the cause of the previous malformed output. Diagnostics now distinguish
+refusal/empty/malformed responses using counts and booleans only.
+
+The next batch passed manual-stop information clarification, the “sì grazie”
+follow-up, sourced information approval without coordinates, and a read-only
+remaining-time/group-cost summary. The timing case exposed incorrect deadline
+year generation and a research citation missing from the day-level source list.
+Both proposals were rejected safely. Regression fixes scope generated dates,
+IDs and citations to the supplied context, independently validate deadlines in
+the day's timezone, and alias saved research sources across venues.
+
+A fresh batch on commit `600bf4f` then passed the coordinated 20-minute delay /
+60-minute visit, preserved the other stop/manual connection, and approved a
+history-based undo that retained the earlier information overlay. Neither case
+wrote before approval; operational state was preserved. The disposable trip was
+removed afterward. All five targeted conversation checkpoints have passed across
+these small batches; this is not a broad language-quality success rate.
+
+Known new test charges totalled 25,966 microdollars ($0.025966), including failed
+attempts. The ledger accounts for $0.484950 of the existing $1 pilot, including
+the prior maximum reconciliation; this is not an independently verified invoice.
+No reservations or active runs remain, and AI is enabled only in the isolated
+preview under unchanged caps. Private request/evidence records remain in ignored
+local data. The broader live release matrix below remains outstanding.
 
 After reconciliation and explicit live approval, use a small batch in the
 isolated protected preview, within the existing cap. Record request/operation

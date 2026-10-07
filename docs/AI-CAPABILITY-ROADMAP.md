@@ -3,7 +3,9 @@
 Date: 2026-10-07. The owner approved implementation of Phases 0–2. The analysis
 below records the pre-implementation assessment; see the delivery addendum and
 [implementation documentation](AI-DEVELOPMENT.md#phase-02-foundation) for current behavior.
-This approval does not authorize reconciling an unknown charge or resuming paid evaluation.
+Implementation approval alone does not authorize charge reconciliation or paid
+evaluation. The owner subsequently approved maximum accounting for the existing
+hold and continuation within the original $1 pilot; see the delivery update below.
 
 ## Recommendation
 
@@ -436,7 +438,10 @@ The no-spend suite now has 60 canonical scenario contracts plus multi-turn,
 privacy, budget, UI and scheduling regressions. These exercise scripted structured
 provider decisions and application behavior; they do not measure the live model's
 ability to choose those decisions from Italian prompts. The Phase 1 Wawel follow-up
-and Phase 2 language-quality release gates remain pending approved live evaluation.
+has now passed in a bounded live batch. Coordinated delay/shortening, reviewed
+information saving, read-only group costs and schedule-only undo also passed.
+Two safely rejected live outputs led to date/citation regression fixes. The wider
+Phase 2 language-quality release matrix remains pending evaluation.
 Do not advertise a measured 95% task-success rate yet.
 
 Public place adapter decision: retain the current sourced Wikipedia landmark
@@ -446,6 +451,8 @@ license, quota and account setup; there is no hidden fallback to an arbitrary UR
 or invented coordinates. The day audit checks saved evidence and can request at
 most two new information lookups, rather than claiming to refresh every stop.
 
-Paid staging remains disabled while the existing interrupted operation is held.
-Production/shared staging, provider credentials, prices and spending ceilings
-are unchanged by this implementation.
+The owner-approved maximum reconciliation resolved the interrupted operation.
+Paid AI is enabled in the isolated preview under the original $1 pilot and
+$0.30/request cap, with no outstanding holds. Production/shared staging,
+provider credentials, prices and spending ceilings are unchanged. Detailed
+verification and its limitations are in [AI evaluation](AI-EVALUATION.md).

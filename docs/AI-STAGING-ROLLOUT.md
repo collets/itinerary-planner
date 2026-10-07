@@ -25,6 +25,13 @@ not independently verified invoice usage. The operation was not dispatched again
 Bounded testing may continue under the existing $1 pilot and $0.30/request cap.
 No provider calls or ledger changes are needed for local contract/browser suites.
 
+Bounded live validation subsequently passed manual-stop information and its
+confirmation, reviewed enrichment, local cost/time answers, coordinated timing
+changes and schedule-only undo. Safely rejected malformed/date/citation outputs
+were investigated and regression coverage added. AI is enabled in the isolated
+preview; no unresolved charges remain. See [measured results and remaining
+release scope](AI-EVALUATION.md#required-live-acceptance-before-advertising-broader-support).
+
 ## Current state and release blockers
 
 - Feature branch: `feature/ai-assistance`; `448cb37` was the baseline before rollout preparation.
