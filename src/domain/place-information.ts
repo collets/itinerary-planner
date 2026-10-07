@@ -30,6 +30,8 @@ const window = z
   .strict();
 export const PlaceResearchSchema = z
   .object({
+    // Optional for overlays saved before public-name research was supported.
+    identifiedPlace: fact.nullable().optional(),
     description: fact.nullable(),
     details: fact.nullable(),
     trivia: fact.nullable(),
@@ -83,6 +85,7 @@ export const PlaceInformationSchema = PlaceResearchSchema.extend({
     if (sources.size !== value.sources.length)
       ctx.addIssue({ code: 'custom', path: ['sources'], message: 'Duplicate evidence IDs' });
     for (const key of [
+      'identifiedPlace',
       'description',
       'details',
       'trivia',

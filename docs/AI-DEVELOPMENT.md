@@ -339,7 +339,12 @@ New/replacement stops can run one bounded information round (maximum two public
 places), then replan once with date-specific opening windows. Existing visit/meal
 stops offer **Aggiorna informazioni con AI**. The shortcut prepares an explicit
 request; it does not spend until sent. Selected-stop requests such as “Controlla
-orari e prezzi” also select the information flow when no schedule change is asked.
+orari e prezzi” or “Dammi informazioni sui prezzi e gli orari” also select the
+information flow when no schedule change is asked. General chat selects existing
+public stop IDs using a bounded `informationRequests` output, with no actions or
+routes. Replies such as “si grazie” inherit this intent through up to three turns;
+an intervening schedule request or different selected stop stops that inheritance.
+Old failed confirmations are recoverable without replaying their provider calls.
 Information-only requests never alter the schedule, reservations or original
 cost estimate, including for booked/completed activities. Every overlay is
 reviewed before saving, with inline citations and a check date. Original manual
@@ -352,8 +357,14 @@ without disabling existing itinerary assistance. No new account or runtime is
 needed. Research uses the configured Responses model, fixed OpenAI endpoint,
 `store:false`, standard tier, no redirects/retries, `parallel_tool_calls:false`,
 `max_tool_calls:2`, low search context and the ordinary output/40-second ceilings.
-Only public name, verified position and visit date enter its input; no raw user
+Only public name, public destination, optional fresh verified position and visit
+date enter its input; no raw user
 question, itinerary, traveler, accommodation, booking or ticket data.
+Manual stops need no coordinates for visitor information: hosted research resolves
+the place from its name and destination. Without coordinates a cited `identifiedPlace`
+is required and shown in the review and saved details. It does not invent or save
+coordinates, replace the manual place or alter its routes. Genuine ambiguity leaves
+the facts unverified. Walking route computation still requires verified coordinates.
 
 The reservation covers three possible model passes with the documented 128k
 hosted-search context ceiling (or the model ceiling if lower), the configured

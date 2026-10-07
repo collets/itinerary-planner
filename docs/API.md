@@ -89,8 +89,13 @@ Use a stable unique request ID for network retries. Create is idempotent only fo
 the same payload, trip and original version; different payloads with the same ID
 return 409. `preference` is `fastest` (default) or `scenic`. The text is 1–2,000
 characters. `purpose` is `adapt` (default) or `information`; information requests
-require a selected public visit/meal stop, verified coordinates, configured web
-research and no draft. A parent job must belong to the same trip/day and be terminal. Draft
+require configured web research and no draft. A selected public visit/meal stop
+can be researched directly; general-chat questions select at most two existing
+public stops through bounded `informationRequests` IDs, never scheduling or routing.
+Research uses the public name and destination, with verified coordinates when
+available. Confirmation replies retain information intent through up to three
+previous turns, including replies saved before this behavior was introduced.
+A parent job must belong to the same trip/day and be terminal. Draft
 is a validated TravelCommand, not a saved itinerary edit. Only flexible same-day
 delay/timing/skip/move/add drafts are accepted; lock, restore, undo, shared notes,
 actual-departure overrides and booking acknowledgments cannot enter this API.

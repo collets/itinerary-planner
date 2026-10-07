@@ -75,6 +75,8 @@ export const AiModelOutputSchema = z
     clarification: z.string().max(1000).nullable(),
     // Default preserves proposals/jobs saved before named lookup was introduced.
     lookups: AiPlaceLookupsSchema.default([]),
+    // Existing stop IDs only; read-only research never carries schedule actions.
+    informationRequests: z.array(Id).max(2).default([]),
     options: z
       .array(
         z
@@ -101,6 +103,7 @@ export const AiModelOutputSchema = z
   })
   .strict();
 export type AiModelOutput = z.infer<typeof AiModelOutputSchema>;
+export type AiModelOutputInput = z.input<typeof AiModelOutputSchema>;
 export type AiIntent = z.infer<typeof AiIntentSchema>;
 export const AiDiscoverySchema = z
   .object({
@@ -249,7 +252,12 @@ export function aiContext(trip: Trip, request: AiRequest, candidates: string[] =
       options: string[];
       previousPlan: boolean;
     }>,
-    request: { text: request.text, preference: request.preference, stepId: request.stepId ?? null },
+    request: {
+      text: request.text,
+      preference: request.preference,
+      stepId: request.stepId ?? null,
+      purpose: request.purpose ?? 'adapt',
+    },
     steps: steps.map((s) => ({
       id: s.id,
       kind: s.kind,
@@ -265,7 +273,7 @@ export function aiContext(trip: Trip, request: AiRequest, candidates: string[] =
         trip.state.reservations.find((r) => r.stepId === s.id && r.status === 'booked')?.slot ??
         null,
       ...(s.kind === 'stop'
-        ? { placeId: s.placeId }
+        ? { placeId: s.placeId, category: s.category }
         : {
             fromPlaceId: s.fromPlaceId,
             toPlaceId: s.toPlaceId,

@@ -23,6 +23,13 @@ export function PlaceInformation({ information }: { information: Information }) 
         {information.visitDate.split('-').reverse().join('/')}. Sintesi AI da fonti pubbliche;
         verifica eventuali variazioni.
       </p>
+      {information.identifiedPlace && (
+        <div>
+          <h4>Luogo individuato</h4>
+          <p>{information.identifiedPlace.text}</p>
+          {citations(information.identifiedPlace.sourceIds)}
+        </div>
+      )}
       {information.description && (
         <div>
           <p>{information.description.text}</p>

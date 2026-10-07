@@ -1,6 +1,6 @@
 import type {
   AiContext,
-  AiModelOutput,
+  AiModelOutputInput,
   AiRoute,
   AiDiscovery,
   AiPlaceLookup,
@@ -63,7 +63,7 @@ export class MockAiProviders implements AiProviders {
     context: AiContext,
     _signal?: AbortSignal,
     _requestId?: string,
-  ): Promise<Charged<AiModelOutput>> {
+  ): Promise<Charged<AiModelOutputInput>> {
     const text = context.request.text.toLocaleLowerCase('it');
     if (/sostitui|alternativ|cambia.*(?:tappa|visita)/.test(text))
       return {
@@ -79,7 +79,7 @@ export class MockAiProviders implements AiProviders {
     const selected =
       context.steps.find((s) => s.id === context.request.stepId) ??
       context.steps.find((s) => s.kind === 'stop' && !s.completed && !s.fixed && !s.booked);
-    const actions: AiModelOutput['options'][number]['actions'] = [];
+    const actions: AiModelOutputInput['options'][number]['actions'] = [];
     const minutes = Number(text.match(/\b(\d{1,3})\s*(?:min|minuti)\b/)?.[1]);
     if (selected && minutes >= 1 && minutes <= 720 && /ritard|dopo|posticip/.test(text))
       actions.push({

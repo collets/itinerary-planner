@@ -194,5 +194,9 @@ Applying it uses the same authenticated ETag/preview approval and atomic history
 entry as itinerary edits. Undo restores only the information overlay of affected
 places and respects intervening edits; it does not roll back financial history.
 Research caches are private server data, expire for reuse after 24 hours, and
-are scoped to the public name/coordinates and exact visit date. Never place
+are scoped to the public name/destination, optional verified coordinates and exact
+visit date. Optional `identifiedPlace` is a cited name/city used to make a public
+name match visible in review; old overlays without it remain valid. Visitor
+information can be researched for manual stops without coordinates, but this does
+not supply routing coordinates or change the saved location. Never place
 personal names, accommodation or credentials in public research fields.

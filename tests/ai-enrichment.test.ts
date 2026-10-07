@@ -163,4 +163,22 @@ describe('Bounded hosted research', () => {
     ).rejects.toThrow('nome pubblico');
     expect(fetch).not.toHaveBeenCalled();
   });
+  it('researches a public name and destination without coordinates, requiring a cited identified place', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const raw = response(),
+      query = { name: 'Museo sintetico', area: 'Borgo Blu', visitDate: '2026-11-12' };
+    expect(readResearch(raw, query, price, 1050000, 4096, now)).toEqual({
+      value: null,
+      actualCost: 10625,
+    });
+    const facts = JSON.parse(raw.output[1].content![0].text!);
+    facts.identifiedPlace = { text: 'Museo sintetico, Borgo Blu', sourceIds: ['official'] };
+    raw.output[1].content![0].text = JSON.stringify(facts);
+    expect(readResearch(raw, query, price, 1050000, 4096, now).value?.identifiedPlace).toEqual(
+      facts.identifiedPlace,
+    );
+    facts.identifiedPlace.sourceIds = ['unseen'];
+    raw.output[1].content![0].text = JSON.stringify(facts);
+    expect(readResearch(raw, query, price, 1050000, 4096, now).value).toBeNull();
+  });
 });

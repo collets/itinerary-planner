@@ -88,6 +88,7 @@ function directions(duration = 600, distance = 800) {
 describe('OpenAI Responses adapter contracts', () => {
   it('keeps named lookup required in the strict provider schema', () => {
     expect(modelJsonSchema.required).toContain('lookups');
+    expect(modelJsonSchema.required).toContain('informationRequests');
     const encoded = JSON.stringify(modelJsonSchema.properties?.lookups);
     expect(encoded).not.toContain('\\p{');
   });
@@ -256,7 +257,7 @@ describe('OpenAI Responses adapter contracts', () => {
     expect(modelJsonSchema).toMatchObject({
       type: 'object',
       additionalProperties: false,
-      required: ['message', 'clarification', 'lookups', 'options'],
+      required: ['message', 'clarification', 'lookups', 'informationRequests', 'options'],
     });
   });
   it('preserves a known charge when the model refuses, truncates or produces unusable JSON', async () => {
