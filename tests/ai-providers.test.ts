@@ -4,6 +4,7 @@ import {
   liveProvidersFromEnvironment,
   providerJson,
   modelJsonSchema,
+  modelSchemaFor,
   type LiveAiConfig,
 } from '../src/server/ai-live';
 import { aiProviders } from '../src/server/ai-config';
@@ -273,6 +274,29 @@ describe('OpenAI Responses adapter contracts', () => {
       value: null,
       actualCost: 215,
     });
+  });
+  it('restricts information targets to existing public stop IDs, excluding place IDs and schedule mode', () => {
+    const input = aiContext(
+      exampleTrip(),
+      AiRequestSchema.parse({
+        id: 'information-schema',
+        dayId: 'day-one',
+        text: 'Orari e prezzi',
+        purpose: 'information',
+      }),
+    );
+    expect(modelSchemaFor(input).properties?.informationRequests).toMatchObject({
+      maxItems: 2,
+      items: { enum: ['square', 'museum'] },
+    });
+    expect(modelSchemaFor(context()).properties?.informationRequests).toMatchObject({
+      maxItems: 0,
+    });
+    input.steps.forEach((s) => {
+      if ('category' in s) s.category = 'logistics';
+    });
+    expect(modelSchemaFor(input).properties?.informationRequests).toMatchObject({ maxItems: 0 });
+    expect(modelJsonSchema.properties?.informationRequests).not.toHaveProperty('items.enum');
   });
   it('rejects missing usage and anomalous token usage without retrying the provider', async () => {
     const fetch = vi.fn().mockResolvedValue(json({ status: 'completed', output: [] }));

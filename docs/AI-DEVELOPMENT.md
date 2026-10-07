@@ -342,7 +342,10 @@ request; it does not spend until sent. Selected-stop requests such as “Control
 orari e prezzi” or “Dammi informazioni sui prezzi e gli orari” also select the
 information flow when no schedule change is asked. General chat selects existing
 public stop IDs using a bounded `informationRequests` output, with no actions or
-routes. Replies such as “si grazie” inherit this intent through up to three turns;
+routes. Its strict provider schema enumerates only the active visit/meal stop IDs
+from that day's context, so catalog place IDs cannot be returned as stop IDs.
+In schedule mode this array must be empty. Replies such as “si grazie” inherit
+this intent through up to three turns;
 an intervening schedule request or different selected stop stops that inheritance.
 Old failed confirmations are recoverable without replaying their provider calls.
 Information-only requests never alter the schedule, reservations or original

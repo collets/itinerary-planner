@@ -75,6 +75,23 @@ export const modelJsonSchema = z.toJSONSchema(
   { target: 'draft-7' },
 );
 
+/** Make the stop/venue ID distinction enforceable in strict model output. */
+export function modelSchemaFor(context: AiContext) {
+  const schema = structuredClone(modelJsonSchema);
+  const requests = schema.properties!.informationRequests as Record<string, unknown>;
+  const ids =
+    context.request.purpose === 'information'
+      ? context.steps
+          .filter(
+            (s) => s.kind === 'stop' && 'category' in s && ['visit', 'meal'].includes(s.category),
+          )
+          .map((s) => s.id)
+      : [];
+  requests.maxItems = Math.min(2, ids.length);
+  if (ids.length) requests.items = { type: 'string', enum: ids };
+  return schema;
+}
+
 /** Native fetch, no retries, no redirects, no arbitrary destination or tool URL. */
 export async function providerJson(
   url: URL | string,
@@ -299,7 +316,7 @@ export class LiveAiProviders implements AiProviders {
               type: 'json_schema',
               name: 'itinerary_options',
               strict: true,
-              schema: modelJsonSchema,
+              schema: modelSchemaFor(context),
             },
           },
           tools: [],
