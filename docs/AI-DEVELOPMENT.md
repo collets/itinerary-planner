@@ -142,6 +142,10 @@ are read with an 8 KB ceiling; unknown metadata and all error messages are omitt
 Other headers, request URLs, payloads, provider error bodies and exception
 messages are omitted. Diagnostics do not change dispatch ownership, settlement
 or the prohibition on automatic provider retries.
+Invalid model replies log only a fixed completion/JSON category. Contract
+failures log the persisted stage, validation codes and allowlisted field paths;
+values, unknown field names and validation messages are excluded. Known usage
+is settled even when a reply cannot safely produce a proposal.
 
 Contracts were checked against primary documentation on 2026-10-05:
 [Responses](https://developers.openai.com/api/reference/python/resources/responses/methods/create),

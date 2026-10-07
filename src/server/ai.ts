@@ -685,6 +685,43 @@ export class AiService {
         });
       }
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        const fields = new Set([
+          'message',
+          'clarification',
+          'lookups',
+          'name',
+          'area',
+          'options',
+          'title',
+          'explanation',
+          'actions',
+          'type',
+          'stepId',
+          'placeId',
+          'minutes',
+          'start',
+          'durationMinutes',
+          'afterId',
+          'routes',
+          'fromPlaceId',
+          'toPlaceId',
+          'poiPlaceIds',
+          'sourceIds',
+        ]);
+        console.warn('AI contract rejected', {
+          stage: job.stage,
+          issues: error.issues.slice(0, 5).map((issue) => ({
+            code: issue.code,
+            path: issue.path
+              .slice(0, 8)
+              .map((part) =>
+                typeof part === 'number' ? 'item' : fields.has(String(part)) ? part : 'field',
+              )
+              .join('.'),
+          })),
+        });
+      }
       let uncertain =
         error instanceof AiBudgetError && ['uncertain', 'pricing'].includes(error.code);
       await this.budget.cancel(id).catch(() => {});

@@ -39,18 +39,38 @@ async function ready(input = request()) {
 }
 
 describe('AI context, proposals and durable stages', () => {
+  it('diagnoses contract fields without logging model values, private keys or error messages', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(providers, 'plan').mockResolvedValue({
+      actualCost: 0,
+      value: {
+        message: 'SECRET model response',
+        clarification: null,
+        options: [],
+        lookups: [{ name: 'https://SECRET', area: 'Cracovia' }],
+      },
+    });
+    const before = await trips.read('example-trip');
+    const job = await ready(request('invalid-place-contract', 'Aggiungi un castello'));
+    expect(job.status).toBe('failed');
+    expect(warn).toHaveBeenCalledWith('AI contract rejected', {
+      stage: 'model',
+      issues: [{ code: 'invalid_format', path: 'lookups.item.name' }],
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+    expect((await trips.read('example-trip')).etag).toBe(before.etag);
+    expect(await ai.budget.status()).toMatchObject({ active: 0, reserved: 0 });
+  });
   it('stops after one lookup round even if the model requests another search', async () => {
-    const plan = vi
-      .spyOn(providers, 'plan')
-      .mockResolvedValue({
-        actualCost: 0,
-        value: {
-          message: 'Cerco.',
-          clarification: null,
-          options: [],
-          lookups: [{ name: 'Wawel', area: 'Cracovia' }],
-        },
-      });
+    const plan = vi.spyOn(providers, 'plan').mockResolvedValue({
+      actualCost: 0,
+      value: {
+        message: 'Cerco.',
+        clarification: null,
+        options: [],
+        lookups: [{ name: 'Wawel', area: 'Cracovia' }],
+      },
+    });
     const lookup = vi.spyOn(providers, 'lookup');
     const before = await trips.read('example-trip');
     const job = await ready(request('no-search-loop', 'Aggiungi Wawel'));
@@ -69,17 +89,15 @@ describe('AI context, proposals and durable stages', () => {
       operations: 12,
     });
     vi.spyOn(providers, 'modelBound').mockReturnValue(265_572);
-    const plan = vi
-      .spyOn(providers, 'plan')
-      .mockResolvedValue({
-        actualCost: 40_000,
-        value: {
-          message: 'Cerco.',
-          clarification: null,
-          options: [],
-          lookups: [{ name: 'Wawel', area: 'Cracovia' }],
-        },
-      });
+    const plan = vi.spyOn(providers, 'plan').mockResolvedValue({
+      actualCost: 40_000,
+      value: {
+        message: 'Cerco.',
+        clarification: null,
+        options: [],
+        lookups: [{ name: 'Wawel', area: 'Cracovia' }],
+      },
+    });
     const before = await trips.read('example-trip');
     const job = await ready(request('lookup-cap', 'Aggiungi Wawel'));
     expect(job.status).toBe('failed');

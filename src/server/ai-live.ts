@@ -321,8 +321,12 @@ export class LiveAiProviders implements AiProviders {
         value = JSON.parse(text);
       } catch {
         /* Known charge, invalid output: settle before rejecting in orchestration. */
+        console.warn('AI model reply rejected', { category: 'invalid-json' });
       }
-    }
+    } else
+      console.warn('AI model reply rejected', {
+        category: response.status === 'incomplete' ? 'incomplete' : 'not-completed',
+      });
     return { value, actualCost };
   }
   discoveryBound() {
