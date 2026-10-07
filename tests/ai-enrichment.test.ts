@@ -132,6 +132,21 @@ describe('Bounded hosted research', () => {
     });
     expect(() => readResearch(raw, query, price, 1050000, 4096, now)).toThrow('bound');
   });
+  it('canonicalizes public tracking links against real tool evidence before validation', () => {
+    const raw = response();
+    const facts = JSON.parse(raw.output[1].content![0].text!);
+    facts.sources[0].url = 'https://museum.example/?utm_source=search#visit';
+    raw.output[0].action!.sources![0].url = facts.sources[0].url;
+    facts.website.url = facts.sources[0].url;
+    raw.output[1].content![0].text = JSON.stringify(facts);
+    const result = readResearch(raw, query, price, 1050000, 4096, now);
+    expect(result.value?.sources[0].url).toBe('https://museum.example/');
+    expect(result.value?.website?.url).toBe('https://museum.example/');
+    facts.sources[0].url = 'https://localhost/private';
+    raw.output[1].content![0].text = JSON.stringify(facts);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(readResearch(raw, query, price, 1050000, 4096, now).value).toBeNull();
+  });
   it('does not grant hosted research with missing or expired prices', async () => {
     const noResearch = new LiveAiProviders(
       { ...config, enrichment: undefined },

@@ -172,6 +172,18 @@ export function readResearch(
     category = 'json';
     const payload = JSON.parse(content.map((item) => item.text ?? '').join(''));
     category = 'fields';
+    // Search often returns tracking queries/fragments. Canonicalize only public
+    // display links before strict validation, using the same normalization as
+    // actual tool evidence. Invalid/private destinations still fail validation.
+    if (payload && typeof payload === 'object') {
+      if (Array.isArray(payload.sources))
+        for (const source of payload.sources)
+          if (source && typeof source === 'object' && typeof source.url === 'string')
+            source.url = normalizedUrl(source.url);
+      for (const key of ['website', 'bookingUrl'])
+        if (payload[key] && typeof payload[key].url === 'string')
+          payload[key].url = normalizedUrl(payload[key].url);
+    }
     const researched = PlaceResearchSchema.parse(payload);
     researched.sources = researched.sources.map((s) => ({ ...s, url: normalizedUrl(s.url)! }));
     if (researched.website) researched.website.url = normalizedUrl(researched.website.url)!;
@@ -186,8 +198,27 @@ export function readResearch(
     if (!parsed.sources.length || parsed.sources.some((source) => !sources.has(source.url)))
       throw new Error('Unseen research citation');
     value = parsed;
-  } catch {
-    console.warn('AI research reply rejected', { category });
+  } catch (error) {
+    const fields = new Set([
+      'description',
+      'details',
+      'trivia',
+      'entrance',
+      'openingHours',
+      'price',
+      'website',
+      'bookingUrl',
+      'sources',
+      'warnings',
+    ]);
+    const issues =
+      error instanceof z.ZodError
+        ? error.issues.slice(0, 8).map((issue) => ({
+            code: issue.code,
+            field: fields.has(String(issue.path[0])) ? String(issue.path[0]) : 'reply',
+          }))
+        : undefined;
+    console.warn('AI research reply rejected', { category, ...(issues ? { issues } : {}) });
   }
   return { value, actualCost };
 }
