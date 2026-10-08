@@ -362,6 +362,194 @@ describe('Phase 0–2 conversation contracts (scripted providers, not language-q
     expect(provider.enrich).toHaveBeenCalledOnce();
   });
 
+  it('turns a landmark-coordinate prose stall into an add preview within the same bounded request', async () => {
+    const t = { ...task(['research', 'propose']), changeIntent: 'add-stop' as const };
+    vi.spyOn(provider, 'lookup').mockResolvedValue({ value: discovery(), actualCost: 0 });
+    const plan = vi
+      .spyOn(provider, 'plan')
+      .mockResolvedValueOnce({
+        value: reply({ task: t, lookups: [{ name: 'Fabbrica del borgo', area: 'Borgo Blu' }] }),
+        actualCost: 0,
+      })
+      .mockResolvedValueOnce({
+        value: reply({
+          task: t,
+          message: 'La posizione non è un ingresso verificato. Posso proporre una visita esterna.',
+        }),
+        actualCost: 0,
+      })
+      .mockImplementationOnce(async (context) => {
+        expect(context.planningFeedback).toContain('changeIntent');
+        const candidate = context.places.find((p) => p.id === 'public-candidate')!;
+        expect(candidate).toMatchObject({
+          origin: 'discovered',
+          publicResearchAllowed: true,
+          scheduledStepIds: [],
+          location: { hasCoordinates: true },
+        });
+        return {
+          value: reply({
+            task: t,
+            options: [
+              option([
+                {
+                  ...action('add'),
+                  stepId: null,
+                  placeId: candidate.id,
+                  title: 'Visita esterna indicativa',
+                  start: '2026-11-12T14:00:00+01:00',
+                  durationMinutes: 20,
+                  afterId: 'museum',
+                },
+              ]),
+            ],
+          }),
+          actualCost: 0,
+        };
+      });
+    vi.spyOn(provider, 'route').mockImplementation(async (query) => ({
+      actualCost: 0,
+      value: {
+        fromPlaceId: query.fromPlaceId,
+        toPlaceId: query.toPlaceId,
+        durationMinutes: 10,
+        distanceKm: 0.5,
+        streets: ['Via sintetica'],
+        pois: [],
+        estimate: true,
+        provider: 'mock',
+        checkedAt: new Date(now).toISOString(),
+        directMinutes: 10,
+        extraWalkingMinutes: 0,
+        geometry: [],
+        citations: [],
+      },
+    }));
+    const { job, original } = await run(
+      'landmark-stall',
+      'Aggiungi una visita esterna alla fabbrica alle 14',
+      { stepId: undefined },
+    );
+    expect(job.status, job.message).toBe('ready');
+    expect(plan).toHaveBeenCalledTimes(3);
+    expect(provider.enrich).not.toHaveBeenCalled();
+    expect(job.proposals[0].commands.some((c) => c.action.type === 'add')).toBe(true);
+    expect(job.proposals[0].warnings.some((w) => w.includes('non un ingresso verificato'))).toBe(
+      true,
+    );
+    expect((await trips.read('example-trip')).etag).toBe(original.etag);
+    const saved = await ai.apply(
+      'example-trip',
+      job.proposals[0].id,
+      job.proposals[0].previewHash,
+      original.etag,
+    );
+    expect(
+      saved.trip.plan.steps.filter((s) => s.kind === 'stop' && s.placeId === 'public-candidate'),
+    ).toHaveLength(1);
+    expect(saved.trip.state).toEqual(original.trip.state);
+  });
+
+  it('fails honestly after three prose-only passes and cannot downgrade an unfinished add to an answer', async () => {
+    const t = { ...task(['propose']), changeIntent: 'add-stop' as const };
+    const plan = vi
+      .spyOn(provider, 'plan')
+      .mockResolvedValueOnce({
+        value: reply({ task: t, message: 'Propongo una nuova tappa.' }),
+        actualCost: 0,
+      })
+      .mockResolvedValue({
+        value: reply({
+          task: { ...task(), changeIntent: null },
+          message: 'Ho aggiunto la visita.',
+        }),
+        actualCost: 0,
+      });
+    const { job, original } = await run('empty-add', 'Aggiungi una tappa');
+    expect(plan).toHaveBeenCalledTimes(3);
+    expect(job.status).toBe('failed');
+    expect(job.message).toContain('Non è stata generata una proposta applicabile');
+    expect(job.task?.changeIntent).toBe('add-stop');
+    expect(job.proposals).toEqual([]);
+    expect((await trips.read('example-trip')).etag).toBe(original.etag);
+    const status = await ai.budget.status();
+    expect(status.reserved).toBe(0);
+    expect(status.active).toBe(0);
+  });
+
+  it('keeps a research prerequisite inside the unfinished schedule task', async () => {
+    const t = { ...task(['research', 'propose']), changeIntent: 'adjust-stops' as const };
+    const plan = vi
+      .spyOn(provider, 'plan')
+      .mockResolvedValueOnce({
+        value: reply({ task: t, informationRequests: ['museum'] }),
+        actualCost: 0,
+      })
+      .mockResolvedValueOnce({ value: reply({ task: t, options: [option()] }), actualCost: 0 });
+    const { job, original } = await run(
+      'research-before-change',
+      'Controlla gli orari e accorcia la visita',
+    );
+    expect(job.status, job.message).toBe('ready');
+    expect(plan).toHaveBeenCalledTimes(2);
+    expect(job.proposals[0].commands).toHaveLength(1);
+    expect(job.proposals[0].information).toHaveLength(1);
+    expect((await trips.read('example-trip')).etag).toBe(original.etag);
+  });
+
+  it('associates a sourced position with a public POI that has no existing stop', async () => {
+    vi.spyOn(provider, 'lookup').mockResolvedValue({ value: discovery(), actualCost: 0 });
+    const t = { ...task(['propose']), changeIntent: 'location-only' as const };
+    vi.spyOn(provider, 'plan')
+      .mockResolvedValueOnce({
+        value: reply({ task: t, lookups: [{ name: 'Giardino segreto', area: 'Borgo Blu' }] }),
+        actualCost: 0,
+      })
+      .mockResolvedValueOnce({
+        value: reply({
+          task: t,
+          locationRequests: [{ placeId: 'blue-garden', candidateId: 'public-candidate' }],
+          options: [option([])],
+        }),
+        actualCost: 0,
+      });
+    const { job, original } = await run(
+      'public-poi-position',
+      'Verifica la posizione del giardino pubblico',
+    );
+    expect(job.status, job.message).toBe('ready');
+    expect(job.proposals[0].locations[0].placeId).toBe('blue-garden');
+    expect(job.proposals[0].commands).toEqual([]);
+    expect((await trips.read('example-trip')).etag).toBe(original.etag);
+  });
+  it('keeps private logistics out of the broadened public-location association boundary', async () => {
+    const current = await trips.read('example-trip');
+    await trips.mutate('example-trip', current.etag, (trip) => {
+      const stop = trip.plan.steps.find((s) => s.id === 'museum')!;
+      if (stop.kind === 'stop') stop.category = 'logistics';
+    });
+    vi.spyOn(provider, 'lookup').mockResolvedValue({ value: discovery(), actualCost: 0 });
+    const t = { ...task(['propose']), changeIntent: 'location-only' as const };
+    vi.spyOn(provider, 'plan')
+      .mockResolvedValueOnce({
+        value: reply({ task: t, lookups: [{ name: 'Luogo pubblico', area: 'Borgo Blu' }] }),
+        actualCost: 0,
+      })
+      .mockResolvedValueOnce({
+        value: reply({
+          task: t,
+          locationRequests: [{ placeId: 'blue-museum', candidateId: 'public-candidate' }],
+          options: [option([])],
+        }),
+        actualCost: 0,
+      });
+    const { job, original } = await run('private-position', 'Rivedi la posizione');
+    expect(job.status).toBe('failed');
+    expect(job.proposals).toEqual([]);
+    expect((await trips.read('example-trip')).etag).toBe(original.etag);
+    expect(provider.enrich).not.toHaveBeenCalled();
+  });
+
   it('repairs a missing public location before routing when the planner omitted lookup', async () => {
     const current = await trips.read('example-trip');
     await trips.mutate('example-trip', current.etag, (trip) => {

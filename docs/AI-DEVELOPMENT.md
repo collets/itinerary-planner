@@ -68,6 +68,31 @@ requests, including routing/research. Restart ordinary `pnpm dev` without an
 
 ## Provider boundaries and limitations
 
+### Executable changes and landmark coordinates
+
+Tasks now retain `changeIntent` (`add-stop`, `replace-stop`, `adjust-stops`,
+`route`, `location-only`, `undo`, or null). It is required in new live replies;
+older stored tasks remain readable. A requested change cannot complete with
+prose or an unrelated partial preview. The server checks the option's actions,
+preserves intent through internal research passes, and can request a corrected
+structured reply within the existing three-pass ceiling. If no executable option
+is produced, it reports failure with the itinerary unchanged. A new user turn
+can still cancel or supersede the task; ordinary read-only answers remain valid.
+
+Context distinguishes discovered candidates from itinerary places and lists
+their scheduled stops. A sourced candidate with fresh coordinates can be used
+directly in an add action. A public itinerary POI may receive a sourced location
+overlay even if it is not a museum or an existing stop. Private logistics remain
+excluded. Location association and schedule changes use the same reviewed
+atomic proposal; there is no separate preliminary approval step.
+
+Landmark coordinates do not certify a visitor entrance. Proposals explicitly
+show that limitation. It does not prevent an estimated exterior visit and a
+measured walk to the sourced point. A user requirement for verified interior
+opening still needs applicable evidence. Optional automatic visitor research
+requires a remaining reasoning pass; explicit research remains bounded by the
+existing operation and spending limits.
+
 `AiService` is a bounded application orchestrator, not an unrestricted agent loop.
 Stages persist independently: optional nearby research, up to three structured
 Responses reasoning passes, one named-place lookup round, one information round

@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { Id } from './schema.js';
 
 const instant = z.iso.datetime({ offset: true });
+export const AiChangeIntentSchema = z
+  .enum(['add-stop', 'replace-stop', 'adjust-stops', 'route', 'location-only', 'undo'])
+  .nullable();
 export const AiConstraintsSchema = z
   .object({
     keepStepIds: z.array(Id).max(60),
@@ -16,6 +19,8 @@ export const AiConstraintsSchema = z
   .strict();
 export const AiTaskSchema = z
   .object({
+    // Optional solely for task state persisted before executable-intent tracking.
+    changeIntent: AiChangeIntentSchema.optional(),
     goals: z
       .array(z.enum(['answer', 'research', 'compare', 'propose', 'undo']))
       .min(1)

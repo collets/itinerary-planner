@@ -115,6 +115,41 @@ export const AiModelOutputSchema = z
   .strict();
 export type AiModelOutput = z.infer<typeof AiModelOutputSchema>;
 export type AiModelOutputInput = z.input<typeof AiModelOutputSchema>;
+/** Prose and a coordinate mapping alone cannot complete a requested new stop. */
+export function executableAiOptions(
+  output: AiModelOutput,
+  task: AiTask,
+  extras: { locations: boolean; information: boolean; draft: boolean },
+) {
+  return output.options.filter((option) => {
+    const actions = option.actions;
+    switch (task.changeIntent) {
+      case 'add-stop':
+        return actions.some((a) => a.type === 'add');
+      case 'replace-stop':
+        return actions.some((a) => a.type === 'skip') && actions.some((a) => a.type === 'add');
+      case 'adjust-stops':
+        return (
+          extras.draft || actions.some((a) => ['delay', 'timing', 'skip', 'move'].includes(a.type))
+        );
+      case 'route':
+        return option.routes.length > 0;
+      case 'location-only':
+        return extras.locations;
+      case 'undo':
+        return !!output.historyRequest;
+      default:
+        return !!(
+          actions.length ||
+          option.routes.length ||
+          output.historyRequest ||
+          extras.locations ||
+          extras.information ||
+          extras.draft
+        );
+    }
+  });
+}
 export type AiIntent = z.infer<typeof AiIntentSchema>;
 export const AiDiscoverySchema = z
   .object({
@@ -389,6 +424,17 @@ export function aiContext(
     })),
     places: places.map((p) => ({
       id: p.id,
+      origin: candidates.includes(p.id) ? ('discovered' as const) : ('itinerary' as const),
+      publicResearchAllowed:
+        candidates.includes(p.id) ||
+        steps.some((s) =>
+          s.kind === 'stop'
+            ? s.placeId === p.id && ['visit', 'meal', 'free-time'].includes(s.category)
+            : s.pois.some((poi) => poi.placeId === p.id),
+        ),
+      scheduledStepIds: steps
+        .filter((s) => s.kind === 'stop' && s.placeId === p.id)
+        .map((s) => s.id),
       name: text(p.name, 160),
       // Private accommodation/logistics fields do not belong in public research.
       address:

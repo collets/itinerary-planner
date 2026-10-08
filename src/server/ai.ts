@@ -20,6 +20,7 @@ import { Id, type Trip } from '../domain/schema.js';
 import {
   AiRequestSchema,
   AiModelOutputSchema,
+  executableAiOptions,
   AiRouteSchema,
   AiProposalSchema,
   AiDiscoverySchema,
@@ -87,7 +88,7 @@ const JobSchema = z
     ]),
     stage: z.enum(['research', 'model', 'lookup', 'information', 'routes', 'finalize', 'done']),
     modelRounds: z.number().int().min(0).max(AI_LIMITS.modelRounds).default(0),
-    feedback: z.enum(['schedule', 'constraints']).nullable().default(null),
+    feedback: z.enum(['schedule', 'constraints', 'execution']).nullable().default(null),
     task: AiTaskSchema.nullable().default(null),
     selectedChoice: AiTaskSchema.shape.pendingQuestion
       .unwrap()
@@ -779,6 +780,17 @@ export class AiService {
       explanation: option.explanation,
       warnings: [
         'Le proposte non modificano o cancellano prenotazioni. Verifica aperture e disponibilità.',
+        ...(job.locations.length ||
+        commands.some((c) => {
+          const action = c.action;
+          return (
+            action.type === 'add' && job.discovery.places.some((p) => p.id === action.stop.placeId)
+          );
+        })
+          ? [
+              'Le coordinate individuate indicano il monumento, non un ingresso verificato. Il percorso termina presso quel punto; verifica sul posto l’accesso.',
+            ]
+          : []),
         ...job.discovery.notes.filter((note) =>
           note.startsWith('Informazioni non verificate per '),
         ),
@@ -964,9 +976,12 @@ export class AiService {
         );
         context.task = job.task;
         context.selectedChoice = job.selectedChoice;
-        context.planningFeedback = job.feedback
-          ? 'La proposta precedente non rispetta il programma o i vincoli richiesti. Usa tempi misurati e calcoli locali per correggerla; se non è fattibile, spiega il conflitto senza inventare una soluzione.'
-          : null;
+        context.planningFeedback =
+          job.feedback === 'execution'
+            ? 'La risposta precedente descrive una modifica, ma non contiene una proposta eseguibile che completa changeIntent. Restituisci options con le azioni richieste e gli eventuali locationRequests insieme; non chiedere approvazione prima dell’anteprima. Le coordinate di un luogo individuato identificano il monumento, non un ingresso: bastano per una visita esterna indicativa. Se esiste un vero ostacolo, chiedi un chiarimento utile o spiega il conflitto.'
+            : job.feedback
+              ? 'La proposta precedente non rispetta il programma o i vincoli richiesti. Usa tempi misurati e calcoli locali per correggerla; se non è fattibile, spiega il conflitto senza inventare una soluzione.'
+              : null;
         context.routeResults = job.routes.map((route) => ({
           fromPlaceId: route.fromPlaceId,
           toPlaceId: route.toPlaceId,
@@ -997,7 +1012,7 @@ export class AiService {
         output.options.forEach((option) => {
           option.actions = orderAiIntents(enriched, option.actions);
         });
-        const task = output.task ?? {
+        const task: AiTask = output.task ?? {
           goals: output.historyRequest
             ? ['undo']
             : output.informationRequests.length || output.placeInformationRequests.length
@@ -1015,8 +1030,17 @@ export class AiService {
             ? { question: output.clarification, choices: [] }
             : null,
         };
-        if (job.modelRounds > 0 && job.task)
+        if (job.modelRounds > 0 && job.task) {
           task.constraints = retainConstraints(job.task.constraints, task.constraints);
+          // Internal tool/refinement passes cannot silently turn an unfinished
+          // write task into a read-only answer. Only a new user turn can do that.
+          if (job.task.changeIntent) task.changeIntent = job.task.changeIntent;
+          if (job.task.goals.includes('propose') && !task.goals.includes('propose'))
+            task.goals.push('propose');
+          if (job.task.goals.includes('undo') && !task.goals.includes('undo'))
+            task.goals.push('undo');
+          task.goals = [...new Set(task.goals)];
+        }
         this.validateTask(task, context);
         job.task = task;
         if (
@@ -1092,13 +1116,8 @@ export class AiService {
             ) ?? [];
           if (
             !target ||
-            !context.steps.some(
-              (s) =>
-                s.kind === 'stop' &&
-                'placeId' in s &&
-                s.placeId === target.id &&
-                ['visit', 'meal', 'free-time'].includes(s.category),
-            ) ||
+            target.origin !== 'itinerary' ||
+            !target.publicResearchAllowed ||
             !candidate ||
             !coords ||
             !sourceIds.length ||
@@ -1171,11 +1190,20 @@ export class AiService {
           const ids = [
             ...new Set([
               ...requestedInformation,
-              ...output.options.flatMap((o) =>
-                o.actions
-                  .filter((a) => a.type === 'add')
-                  .flatMap((a) => (a.placeId ? [a.placeId] : [])),
-              ),
+              // Automatic visitor research is optional, and needs a remaining
+              // reasoning pass. Never spend on it when no pass can use the result.
+              ...(job.modelRounds < AI_LIMITS.modelRounds
+                ? output.options.flatMap((o) =>
+                    o.actions
+                      .filter((a) => a.type === 'add')
+                      .flatMap((a) =>
+                        a.placeId &&
+                        context.places.find((p) => p.id === a.placeId)?.publicResearchAllowed
+                          ? [a.placeId]
+                          : [],
+                      ),
+                  )
+                : []),
             ]),
           ];
           if (ids.length > 2)
@@ -1188,7 +1216,11 @@ export class AiService {
             ids.forEach((placeId) => this.researchQuery(enriched, placeId, job.request.dayId));
             await update((j) => {
               j.output = output;
-              j.informationOnly = !writes && !job.request.draft;
+              j.informationOnly =
+                !writes &&
+                !job.request.draft &&
+                !task.goals.includes('propose') &&
+                !task.changeIntent;
               j.informationQueue = ids;
               j.stage = 'information';
               j.status = 'planning';
@@ -1197,6 +1229,32 @@ export class AiService {
           }
         }
         job.output = output;
+        if (
+          !output.clarification &&
+          (task.goals.includes('propose') || task.goals.includes('undo') || task.changeIntent)
+        ) {
+          output.options = executableAiOptions(output, task, {
+            locations: job.locations.length > 0,
+            information: job.information.length > 0,
+            draft: !!job.request.draft,
+          });
+          if (!output.options.length) {
+            if (job.modelRounds < AI_LIMITS.modelRounds) {
+              await update((j) => {
+                j.output = output;
+                j.feedback = 'execution';
+                j.stage = 'model';
+                j.status = 'planning';
+                j.message = 'Completo la proposta con le modifiche da controllare nell’anteprima…';
+              });
+              return this.get(tripId, id);
+            }
+            throw new AiPlanError(
+              'invalid',
+              'Non è stata generata una proposta applicabile. Nessuna tappa o posizione è stata modificata. Prova a indicare una fascia oraria o un’alternativa.',
+            );
+          }
+        }
         let queue: RouteQuery[];
         try {
           queue = this.collectRoutes(trip, job);
@@ -1236,15 +1294,7 @@ export class AiService {
           if (
             missing.length &&
             missing.length <= 2 &&
-            missing.every((id) =>
-              context.steps.some(
-                (s) =>
-                  s.kind === 'stop' &&
-                  'placeId' in s &&
-                  s.placeId === id &&
-                  ['visit', 'meal', 'free-time'].includes(s.category),
-              ),
-            )
+            missing.every((id) => context.places.find((p) => p.id === id)?.publicResearchAllowed)
           ) {
             const lookups = AiPlaceLookupsSchema.parse(
               missing.map((id) => ({
