@@ -35,7 +35,7 @@ paid provider calls and did not change the remote ledger.
 
 ### Landmark-add follow-up on 2026-10-08
 
-`pnpm check` passed 252 tests, the native server smoke and production build.
+`pnpm check` passed 253 tests, the native server smoke and production build.
 New regressions cover executable add intents rather than prose promises,
 post-lookup clarification/action conflicts, strict three-pass accounting,
 public POI location overlays, an unresolved public anchor plus a new stop in
@@ -47,18 +47,37 @@ No additional local browser batch was run; the existing CI browser gate remains.
 A free provider check found Fabbrica Schindler through its linked Wikidata P625
 record and Castello del Wawel through Wikipedia coordinates. The next disposable
 live add completed two planner passes and location lookup, then an implicitly
-scheduled visitor-information call violated the usage bound. AI was disabled;
-its 119,072-microdollar reservation remains held, with exact invoice usage unknown.
-The ledger total including the hold is 628,476 microdollars of the existing
-1,000,000-microdollar pilot allowance. The original itinerary was not changed,
-and no new factory stop was approved. Live add/route/apply acceptance is pending.
+scheduled visitor-information call violated the usage bound. AI was disabled
+and its 119,072-microdollar reservation was held. The owner explicitly approved
+conservative maximum accounting for that specific operation on 2026-10-08;
+it was settled without redispatch or a claim of confirmed invoice usage.
 
 The follow-up removes implicit visitor research from plain adds; explicit
 information requests and verified-opening requirements remain supported.
 Numeric-only usage diagnostics identify which ceiling failed without logging
-provider text. Further paid acceptance needs usage verification or explicit
-owner-approved conservative settlement of this specific hold; no retry or
-automatic reconciliation of the interrupted operation is permitted.
+provider text. The next fresh request exposed an omitted location association
+for the existing manual castle stop. Routing rejected it safely with known usage
+settled. Pre-routing validation now uses one remaining planning pass to repair
+that association from the already collected evidence, within the same three-pass
+ceiling and without another lookup round.
+
+Fresh live acceptance on `5d31e17` passed the request to add the factory at 14:00
+to a disposable day containing a manually entered castle without coordinates.
+The factory point matched independently retrieved source evidence; the original
+castle ID received the sourced Wawel position rather than a nearby city point.
+Three planner passes, one named lookup and one measured openrouteservice walk
+(33 minutes, with geometry/attribution) produced a single reviewed proposal.
+Approval persisted the factory stop, castle association and route together;
+there was no trip write before approval, operational state was preserved, and
+the original itinerary version stayed unchanged. Both disposable fixtures were
+removed. This is one targeted live success, not a broad language-quality score.
+
+That successful request cost 7,048 microdollars ($0.007048). The pilot ledger now
+accounts for 640,038 microdollars ($0.640038) of its unchanged $1 allowance,
+including prior conservative settlements. No reservations or active runs remain;
+AI is enabled only in the isolated preview. CI for `5d31e17` completed successfully,
+including the existing browser gate. Financial idempotency records and private
+request/evidence files are retained; no interrupted operation was retried.
 
 ## Coverage
 
