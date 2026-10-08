@@ -99,7 +99,11 @@ questions use `interpretInformationRequest: true` so the planner chooses a typed
 focus; `purpose: information` still prohibits itinerary/location changes and routing.
 Research uses the public name and destination, with verified coordinates when
 available. Persisted tasks retain goals, targets, constraints and a pending
-question. Confirmation replies use that state alongside up to three previous
+question. Optional `routingPolicy` is `reuse-existing`, `recalculate` or null:
+timing-only changes can reuse saved connection durations, while structural
+changes still require routing evidence. A validated pending question discards
+mixed operations from that response and returns answerable choices without
+dispatching tools or writing an itinerary. Confirmation replies use that state alongside up to three previous
 turns. `choiceId` requires a parent and must match a nonexpired pending choice
 owned by that trip/day; its target is resolved server-side, never trusted from
 submitted text. A follow-up supersedes its parent's unapplied proposal.

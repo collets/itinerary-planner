@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { exampleTrip } from '../src/domain/fixture';
+import { StepSchema } from '../src/domain/schema';
 import {
   aiContext,
   AiRequestSchema,
@@ -713,6 +714,198 @@ describe('Phase 0–2 conversation contracts (scripted providers, not language-q
       'question-action-conflict-model-2',
     ]);
     expect((await trips.read('example-trip')).etag).toBe(original.etag);
+  });
+
+  it('shows a validated question and discards mixed operations without paying for a correction or dispatching tools', async () => {
+    const t = { ...task(['propose']), changeIntent: 'adjust-stops' as const };
+    t.pendingQuestion = {
+      question: 'Mantieni la cena?',
+      choices: [{ id: 'keep-dinner', label: 'Sì', stepId: 'museum', placeId: 'blue-museum' }],
+    };
+    const lookup = vi.spyOn(provider, 'lookup');
+    const route = vi.spyOn(provider, 'route');
+    const plan = vi.spyOn(provider, 'plan').mockResolvedValueOnce({
+      actualCost: 0,
+      value: reply({
+        task: t,
+        clarification: 'Vuoi mantenere la cena?',
+        options: [option()],
+        lookups: [{ name: 'Museo', area: 'Borgo Blu' }],
+        informationRequests: ['museum'],
+      }),
+    });
+    const first = await run('mixed-question', 'Riprogramma la giornata');
+    expect(first.job.status).toBe('clarification');
+    expect(first.job.message).toBe(t.pendingQuestion.question);
+    expect(first.job.proposals).toEqual([]);
+    expect(first.job.task?.pendingQuestion?.choices[0].id).toBe('keep-dinner');
+    expect(plan).toHaveBeenCalledOnce();
+    expect(lookup).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    expect(provider.enrich).not.toHaveBeenCalled();
+    expect((await trips.read('example-trip')).etag).toBe(first.original.etag);
+    expect(await ai.budget.status()).toMatchObject({ active: 0, reserved: 0 });
+    plan.mockResolvedValueOnce({
+      actualCost: 0,
+      value: reply({
+        task: { ...t, pendingQuestion: null, routingPolicy: 'reuse-existing' },
+        options: [option()],
+      }),
+    });
+    const next = await run('mixed-question-answer', 'Sì', {
+      parentJobId: first.job.id,
+      choiceId: 'keep-dinner',
+    });
+    expect(next.job.status, next.job.message).toBe('ready');
+  });
+
+  it('returns an answerable pending question after the final correction instead of a contract dead end', async () => {
+    const t = { ...task(['propose']), changeIntent: 'adjust-stops' as const };
+    const question = {
+      question: 'Quale ristorante?',
+      choices: [
+        {
+          id: 'restaurant',
+          label: 'Quello già previsto',
+          stepId: 'museum',
+          placeId: 'blue-museum',
+        },
+      ],
+    };
+    const plan = vi.spyOn(provider, 'plan').mockResolvedValue({
+      actualCost: 0,
+      value: reply({
+        task: { ...t, pendingQuestion: question },
+        clarification: null,
+        options: [option()],
+      }),
+    });
+    const route = vi.spyOn(provider, 'route');
+    const { job, original } = await run('final-question', 'Riprogramma dopo la visita');
+    expect(plan).toHaveBeenCalledTimes(3);
+    expect(job.status).toBe('clarification');
+    expect(job.message).toBe(question.question);
+    expect(job.task?.pendingQuestion).toEqual(question);
+    expect(job.proposals).toEqual([]);
+    expect(route).not.toHaveBeenCalled();
+    expect((await trips.read('example-trip')).etag).toBe(original.etag);
+    expect(await ai.budget.status()).toMatchObject({ active: 0, reserved: 0 });
+  });
+
+  it('retimes the existing day without location/routing research, preserving the dinner instant and connection estimates', async () => {
+    const current = await trips.read('example-trip');
+    await trips.mutate('example-trip', current.etag, (trip) => {
+      trip.plan.days[0].stepIds.push('dinner-walk', 'dinner');
+      trip.plan.steps.push(
+        StepSchema.parse({
+          id: 'dinner-walk',
+          kind: 'leg',
+          title: 'Verso cena',
+          fromPlaceId: 'blue-museum',
+          toPlaceId: 'blue-square',
+          mode: 'walk',
+          durationMinutes: 15,
+          start: '2026-11-12T11:45:00+01:00',
+          end: '2026-11-12T12:00:00+01:00',
+          summary: 'Stima salvata.',
+        }),
+        StepSchema.parse({
+          id: 'dinner',
+          kind: 'stop',
+          title: 'Cena',
+          category: 'meal',
+          placeId: 'blue-square',
+          start: '2026-11-12T20:00:00+01:00',
+          end: '2026-11-12T21:00:00+01:00',
+          summary: 'Cena prevista.',
+        }),
+      );
+    });
+    const t = {
+      ...task(['propose']),
+      changeIntent: 'adjust-stops' as const,
+      routingPolicy: 'reuse-existing' as const,
+    };
+    t.constraints.keepStepIds = ['square', 'dinner'];
+    const route = vi.spyOn(provider, 'route'),
+      lookup = vi.spyOn(provider, 'lookup');
+    Object.assign(provider, {
+      validateRoute: vi.fn(() => {
+        throw Error('No new route is needed');
+      }),
+    });
+    const plan = vi
+      .spyOn(provider, 'plan')
+      .mockResolvedValueOnce({
+        actualCost: 0,
+        value: reply({ task: t, lookups: [{ name: 'Museo', area: 'Borgo Blu' }] }),
+      })
+      .mockImplementationOnce(async (context) => {
+        expect(context.planningFeedback).toContain('soltanto gli orari');
+        return {
+          actualCost: 0,
+          value: reply({
+            task: t,
+            options: [
+              {
+                ...option(),
+                routes: [{ fromPlaceId: 'blue-museum', toPlaceId: 'blue-square', poiPlaceIds: [] }],
+              },
+            ],
+          }),
+        };
+      });
+    const { job, original } = await run(
+      'timing-reuses-connections',
+      'Accorcia la visita, conserva la cena alle 20',
+    );
+    expect(job.status, job.message).toBe('ready');
+    expect(plan).toHaveBeenCalledTimes(2);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    expect(provider.enrich).not.toHaveBeenCalled();
+    expect(job.proposals[0].routes).toEqual([]);
+    const applied = await ai.apply(
+      'example-trip',
+      job.proposals[0].id,
+      job.proposals[0].previewHash,
+      original.etag,
+    );
+    expect(Date.parse(applied.trip.plan.steps.find((s) => s.id === 'dinner')!.start)).toBe(
+      Date.parse('2026-11-12T20:00:00+01:00'),
+    );
+    expect(
+      applied.trip.plan.steps.filter((s) => s.kind === 'leg').map((s) => s.durationMinutes),
+    ).toEqual([15, 15]);
+    expect(applied.trip.state).toEqual(original.trip.state);
+  });
+
+  it('retains explicit route recalculation when changing a visit duration', async () => {
+    const t = {
+      ...task(['propose']),
+      changeIntent: 'adjust-stops' as const,
+      routingPolicy: 'recalculate' as const,
+    };
+    vi.spyOn(provider, 'plan').mockResolvedValue({
+      actualCost: 0,
+      value: reply({
+        task: t,
+        options: [
+          {
+            ...option(),
+            routes: [{ fromPlaceId: 'blue-square', toPlaceId: 'blue-museum', poiPlaceIds: [] }],
+          },
+        ],
+      }),
+    });
+    const route = vi.spyOn(provider, 'route');
+    const { job } = await run(
+      'timing-rechecks-route',
+      'Accorcia la visita e ricontrolla il percorso',
+    );
+    expect(job.status, job.message).toBe('ready');
+    expect(route).toHaveBeenCalledOnce();
+    expect(job.proposals[0].routes).toHaveLength(1);
   });
 
   it('repairs a missing public location before routing when the planner omitted lookup', async () => {

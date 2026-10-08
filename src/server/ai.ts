@@ -92,7 +92,7 @@ const JobSchema = z
     stage: z.enum(['research', 'model', 'lookup', 'information', 'routes', 'finalize', 'done']),
     modelRounds: z.number().int().min(0).max(AI_LIMITS.modelRounds).default(0),
     feedback: z
-      .enum(['schedule', 'constraints', 'execution', 'contract', 'location'])
+      .enum(['schedule', 'constraints', 'execution', 'contract', 'location', 'timing'])
       .nullable()
       .default(null),
     task: AiTaskSchema.nullable().default(null),
@@ -527,7 +527,11 @@ export class AiService {
     for (const id of c.keepStepIds) {
       const old = before.plan.steps.find((s) => s.id === id)!,
         current = steps.find((s) => s.id === id);
-      if (!current || current.start !== old.start || current.end !== old.end)
+      if (
+        !current ||
+        Date.parse(current.start) !== Date.parse(old.start) ||
+        Date.parse(current.end) !== Date.parse(old.end)
+      )
         throw new AiPlanError(
           'invalid',
           'La proposta non mantiene una tappa che hai chiesto di conservare.',
@@ -991,15 +995,17 @@ export class AiService {
         context.remainingPlanningPasses = AI_LIMITS.modelRounds - job.modelRounds - 1;
         context.selectedChoice = job.selectedChoice;
         context.planningFeedback =
-          job.feedback === 'contract'
-            ? 'La risposta precedente mescola una domanda e operazioni incompatibili. Se chiedi un vero chiarimento, clarification deve corrispondere esattamente a task.pendingQuestion.question e tutte le operazioni/options devono essere vuote. Se il luogo e la richiesta sono chiari, metti entrambi i campi domanda a null e genera la proposta eseguibile. Non chiedere una conferma preliminare per usare il punto del monumento.'
-            : job.feedback === 'execution'
-              ? 'La risposta precedente descrive una modifica, ma non contiene una proposta eseguibile che completa changeIntent. Restituisci options con le azioni richieste e gli eventuali locationRequests insieme; non chiedere approvazione prima dell’anteprima. Le coordinate di un luogo individuato identificano il monumento, non un ingresso: bastano per una visita esterna indicativa. Se esiste un vero ostacolo, chiedi un chiarimento utile o spiega il conflitto.'
-              : job.feedback === 'location'
-                ? `La ricerca per nome è già completata, ma mancano le associazioni di posizione per i luoghi del percorso: ${JSON.stringify(context.places.filter((p) => !p.location.hasCoordinates && job.queue.some((q) => [q.fromPlaceId, q.toPlaceId, ...q.poiPlaceIds].includes(p.id))).map((p) => ({ placeId: p.id, name: p.name })))}. Restituisci locationRequests con il placeId originale e il candidateId del risultato corrispondente già individuato, insieme alle options della modifica richiesta. Non duplicare la tappa esistente, non richiedere nuove ricerche o un’approvazione preliminare e non chiedere coordinate all’utente. Se i risultati non consentono un’associazione sicura, chiedi solo un chiarimento utile sull’identità.`
-                : job.feedback
-                  ? 'La proposta precedente non rispetta il programma o i vincoli richiesti. Usa tempi misurati e calcoli locali per correggerla; se non è fattibile, spiega il conflitto senza inventare una soluzione.'
-                  : null;
+          job.feedback === 'timing'
+            ? 'La richiesta cambia soltanto gli orari mantenendo le tappe e i collegamenti esistenti. Non servono nuove posizioni, ricerche o percorsi. Usa i durationMinutes già salvati e restituisci le azioni timing/delay necessarie; lookups, locationRequests e option.routes devono essere vuoti. Conserva l’orario della cena confermato in keepStepIds. Se manca davvero una preferenza, chiedi soltanto quella senza operazioni.'
+            : job.feedback === 'contract'
+              ? 'La risposta precedente mescola una domanda e operazioni incompatibili. Se chiedi un vero chiarimento, clarification deve corrispondere esattamente a task.pendingQuestion.question e tutte le operazioni/options devono essere vuote. Se il luogo e la richiesta sono chiari, metti entrambi i campi domanda a null e genera la proposta eseguibile. Non chiedere una conferma preliminare per usare il punto del monumento.'
+              : job.feedback === 'execution'
+                ? 'La risposta precedente descrive una modifica, ma non contiene una proposta eseguibile che completa changeIntent. Restituisci options con le azioni richieste e gli eventuali locationRequests insieme; non chiedere approvazione prima dell’anteprima. Le coordinate di un luogo individuato identificano il monumento, non un ingresso: bastano per una visita esterna indicativa. Se esiste un vero ostacolo, chiedi un chiarimento utile o spiega il conflitto.'
+                : job.feedback === 'location'
+                  ? `La ricerca per nome è già completata, ma mancano le associazioni di posizione per i luoghi del percorso: ${JSON.stringify(context.places.filter((p) => !p.location.hasCoordinates && job.queue.some((q) => [q.fromPlaceId, q.toPlaceId, ...q.poiPlaceIds].includes(p.id))).map((p) => ({ placeId: p.id, name: p.name })))}. Restituisci locationRequests con il placeId originale e il candidateId del risultato corrispondente già individuato, insieme alle options della modifica richiesta. Non duplicare la tappa esistente, non richiedere nuove ricerche o un’approvazione preliminare e non chiedere coordinate all’utente. Se i risultati non consentono un’associazione sicura, chiedi solo un chiarimento utile sull’identità.`
+                  : job.feedback
+                    ? 'La proposta precedente non rispetta il programma o i vincoli richiesti. Usa tempi misurati e calcoli locali per correggerla; se non è fattibile, spiega il conflitto senza inventare una soluzione.'
+                    : null;
         context.routeResults = job.routes.map((route) => ({
           fromPlaceId: route.fromPlaceId,
           toPlaceId: route.toPlaceId,
@@ -1057,6 +1063,7 @@ export class AiService {
           // write task into a read-only answer. Only a new user turn can do that.
           if (job.task.changeIntent) task.changeIntent = job.task.changeIntent;
           if (job.task.researchFocus) task.researchFocus = job.task.researchFocus;
+          if (job.task.routingPolicy) task.routingPolicy = job.task.routingPolicy;
           if (job.task.goals.includes('propose') && !task.goals.includes('propose'))
             task.goals.push('propose');
           if (job.task.goals.includes('undo') && !task.goals.includes('undo'))
@@ -1072,10 +1079,29 @@ export class AiService {
           output.placeInformationRequests.length ||
           output.locationRequests.length ||
           output.historyRequest;
-        // Equivalent wording in a read-only clarification needs no paid repair.
-        // The persisted question is canonical for the UI and its choice IDs.
-        if (task.pendingQuestion && output.clarification && !pendingOperations)
+        // A validated question is safe to show; mixed speculative operations
+        // are discarded, never dispatched or shown as an applicable proposal.
+        if (task.pendingQuestion && output.clarification) {
           output.clarification = task.pendingQuestion.question;
+          if (pendingOperations) {
+            output.message = output.clarification;
+            output.options = [];
+            output.lookups = [];
+            output.informationRequests = [];
+            output.placeInformationRequests = [];
+            output.locationRequests = [];
+            output.historyRequest = null;
+            await update((j) => {
+              j.output = output;
+              j.stage = 'done';
+              j.status = 'clarification';
+              j.feedback = null;
+              j.message = output.clarification!;
+            });
+            await this.budget.finish(id);
+            return this.get(tripId, id);
+          }
+        }
         if (
           !!task.pendingQuestion !== !!output.clarification ||
           (task.pendingQuestion && task.pendingQuestion.question !== output.clarification) ||
@@ -1091,15 +1117,71 @@ export class AiService {
             });
             return this.get(tripId, id);
           }
-          throw new AiPlanError(
-            'invalid',
-            'La domanda di chiarimento deve precedere ricerche e modifiche.',
-          );
+          // Exhausting a correction pass must not strand a valid question.
+          // The user can answer it in a new turn; none of the mixed tools runs.
+          const question =
+            task.pendingQuestion ??
+            (output.clarification ? { question: output.clarification, choices: [] } : null);
+          if (!question)
+            throw new AiPlanError('invalid', 'La richiesta richiede un chiarimento valido.');
+          task.pendingQuestion = question;
+          output.clarification = question.question;
+          output.message = question.question;
+          output.options = [];
+          output.lookups = [];
+          output.informationRequests = [];
+          output.placeInformationRequests = [];
+          output.locationRequests = [];
+          output.historyRequest = null;
+          await update((j) => {
+            j.output = output;
+            j.stage = 'done';
+            j.status = 'clarification';
+            j.feedback = null;
+            j.message = question.question;
+          });
+          await this.budget.finish(id);
+          return this.get(tripId, id);
         }
         const writes =
           output.options.some((o) => o.actions.length || o.routes.length) ||
           output.locationRequests.length ||
           output.historyRequest;
+        if (
+          task.routingPolicy === 'reuse-existing' &&
+          (!job.request.draft || ['timing', 'delay'].includes(job.request.draft.action.type))
+        ) {
+          for (const option of output.options) {
+            if (
+              (option.actions.length || job.request.draft) &&
+              option.actions.every((a) => ['timing', 'delay'].includes(a.type))
+            ) {
+              // These actions cannot change endpoints, order or POIs. Preserve
+              // existing estimated/measured connections instead of rediscovery.
+              option.routes = [];
+            }
+          }
+        }
+        const timingOnly =
+          task.routingPolicy === 'reuse-existing' &&
+          task.changeIntent === 'adjust-stops' &&
+          (!job.request.draft || ['timing', 'delay'].includes(job.request.draft.action.type)) &&
+          output.options.every((o) => o.actions.every((a) => ['timing', 'delay'].includes(a.type)));
+        if (timingOnly && (output.lookups.length || output.locationRequests.length)) {
+          if (job.modelRounds >= AI_LIMITS.modelRounds)
+            throw new AiPlanError(
+              'invalid',
+              'Non è stata preparata una modifica degli orari. I collegamenti esistenti non richiedono nuove posizioni.',
+            );
+          await update((j) => {
+            j.output = output;
+            j.feedback = 'timing';
+            j.stage = 'model';
+            j.status = 'planning';
+            j.message = 'Riprogrammo gli orari usando i collegamenti già salvati…';
+          });
+          return this.get(tripId, id);
+        }
         if (writes && !task.goals.some((g) => ['propose', 'compare', 'undo'].includes(g)))
           throw new AiPlanError(
             'invalid',

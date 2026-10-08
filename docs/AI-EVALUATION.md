@@ -33,6 +33,31 @@ used the existing temporary shared libraries/browser wrapper; CI installs the
 required system packages using the unchanged workflow. These checks made no
 paid provider calls and did not change the remote ledger.
 
+### Schedule clarification recovery on 2026-10-08
+
+`pnpm check` passed 264 tests, the native server smoke and production build.
+New contracts cover discarding speculative operations from a valid question,
+continuing with its typed answer, retaining an answerable question after the
+bounded correction passes, retiming without needless location/routing tools,
+preserving a dinner instant across equivalent timestamp formats, and keeping
+explicit route recalculation available. Spending and pass limits are unchanged.
+
+A private local replay imported a snapshot of the real AI staging itinerary
+into temporary file storage. Three scripted planner responses produced two
+clarifications and one five-command schedule proposal. The selected visit moved
+to 16:05; five preserved activities, including the 20:00 dinner, retained their
+start/end instants. Saved connections, places and operational state were
+preserved. No write occurred before approval. This made no external provider
+calls, incurred no AI charges and did not write to staging or production.
+Personal fixtures and replay evidence remain ignored in local data.
+
+This validates the conversation/storage contract, not fresh model interpretation
+of the reported prompt. A new paid acceptance request was not run: the existing
+$1 pilot ledger accounted for $0.735248 with no holds, leaving $0.264752, less
+than the configured $0.265572 maximum reservation for another planner call.
+Additional live testing requires owner approval for more allowance; no caps
+were raised and no failed request was retried automatically.
+
 ### Focused historical research on 2026-10-08
 
 `pnpm check` passed 260 tests, the native server smoke and production build.

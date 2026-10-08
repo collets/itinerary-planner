@@ -397,6 +397,26 @@ store. No browser can directly access provider credentials or a provider API.
 These are functional/security contract tests, not paid model evaluations or an
 independent penetration test.
 
+## Timing changes and clarification recovery
+
+The task's optional `routingPolicy` distinguishes reusing existing connections
+from explicit recalculation. For `reuse-existing` timing/delay-only options, the
+server retains saved leg durations and removes redundant route requests. An
+unnecessary location lookup gets a bounded planning correction before any lookup
+dispatch. Structural add/reorder/skip changes still require their routing evidence;
+explicit `recalculate` requests retain the route tool and its location checks.
+When bringing stops earlier, include timing actions for intervening legs whose
+saved start would otherwise leave a gap. No estimated duration becomes measured
+merely because its time changes. Confirmed preserved slots use hard `keepStepIds`.
+
+A validated clarification takes priority over mixed speculative operations:
+the server discards every tool/action from that reply, persists the canonical
+question and choices, and finishes the run without a correction call. If a
+question/clarification mismatch uses the final correction pass, a validated
+remaining question is returned as an answerable clarification rather than an
+internal contract error. No discarded operation is dispatched, no proposal is
+offered and no itinerary write occurs. All ordinary pass/spending caps remain.
+
 ## Sourced stop information
 
 New/replacement stops can run one bounded information round (maximum two public

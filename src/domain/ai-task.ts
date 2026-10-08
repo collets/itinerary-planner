@@ -23,6 +23,7 @@ export const AiTaskSchema = z
     // Optional solely for task state persisted before executable-intent tracking.
     changeIntent: AiChangeIntentSchema.optional(),
     researchFocus: ResearchFocusSchema.nullable().optional(),
+    routingPolicy: z.enum(['reuse-existing', 'recalculate']).nullable().optional(),
     goals: z
       .array(z.enum(['answer', 'research', 'compare', 'propose', 'undo']))
       .min(1)
