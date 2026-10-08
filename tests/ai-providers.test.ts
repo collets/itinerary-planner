@@ -176,6 +176,191 @@ describe('OpenAI Responses adapter contracts', () => {
     expect(found.notes.join(' ')).toContain('Nessun risultato');
     expect(fetch).toHaveBeenCalledOnce();
   });
+  it('uses one bounded Wikidata batch for linked landmark coordinates and cites the coordinate record', async () => {
+    const claim = (latitude = 45.002, longitude = 12.002, rank = 'normal') => ({
+      rank,
+      mainsnak: {
+        snaktype: 'value',
+        property: 'P625',
+        datavalue: {
+          type: 'globecoordinate',
+          value: {
+            latitude,
+            longitude,
+            precision: 0.000001,
+            globe: 'http://www.wikidata.org/entity/Q2',
+          },
+        },
+      },
+    });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        json({
+          query: {
+            pages: {
+              '123': {
+                pageid: 123,
+                title: 'Fabbrica sintetica',
+                index: 1,
+                pageprops: { wikibase_item: 'Q123' },
+              },
+              '124': {
+                pageid: 124,
+                title: 'Ambiguous landmark',
+                index: 2,
+                pageprops: { wikibase_item: 'Q124' },
+              },
+              '125': {
+                pageid: 125,
+                title: 'Distant landmark',
+                index: 3,
+                pageprops: { wikibase_item: 'Q125' },
+              },
+            },
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        json({
+          entities: {
+            Q123: { id: 'Q123', claims: { P625: [claim(45, 12, 'deprecated'), claim()] } },
+            Q124: { id: 'Q124', claims: { P625: [claim(), claim(45.003)] } },
+            Q125: { id: 'Q125', claims: { P625: [claim(55, 15)] } },
+          },
+        }),
+      );
+    vi.stubGlobal('fetch', fetch);
+    const trip = locatedTrip();
+    trip.plan.travellers[0].name = 'SECRET_NAME';
+    const found = (
+      await provider().lookup(
+        [{ name: 'Fabbrica sintetica', area: 'Borgo Blu' }],
+        trip,
+        new AbortController().signal,
+      )
+    ).value;
+    expect(found.places.map((p) => p.name)).toEqual(['Fabbrica sintetica']);
+    expect(found.places[0].coordinates).toEqual({
+      lat: 45.002,
+      lng: 12.002,
+      verifiedOn: '2026-10-05',
+    });
+    expect(found.sources[0].url).toBe('https://www.wikidata.org/wiki/Q123');
+    expect(found.sources[0].description).toContain('https://it.wikipedia.org/?curid=123');
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const [url, init] = fetch.mock.calls[1];
+    expect(url.hostname).toBe('www.wikidata.org');
+    expect(url.pathname).toBe('/w/api.php');
+    expect(url.searchParams.get('ids')).toBe('Q123|Q124|Q125');
+    expect(url.searchParams.get('props')).toBe('claims');
+    expect(init.redirect).toBe('error');
+    expect(init.headers).not.toHaveProperty('Authorization');
+    expect(JSON.stringify(fetch.mock.calls)).not.toContain('SECRET');
+    expect(withDiscovery(trip, found).plan.places).toHaveLength(4);
+  });
+  it.each(['non-earth', 'unknown', 'coarse', 'preferred-ambiguous', 'deprecated'])(
+    'rejects unusable Wikidata coordinates: %s',
+    async (kind) => {
+      const claim = {
+        rank: kind === 'deprecated' ? 'deprecated' : 'preferred',
+        mainsnak: {
+          snaktype: kind === 'unknown' ? 'novalue' : 'value',
+          property: 'P625',
+          datavalue: {
+            type: 'globecoordinate',
+            value: {
+              latitude: 45.002,
+              longitude: 12.002,
+              precision: kind === 'coarse' ? 1 : 0.000001,
+              globe:
+                kind === 'non-earth'
+                  ? 'http://www.wikidata.org/entity/Q111'
+                  : 'http://www.wikidata.org/entity/Q2',
+            },
+          },
+        },
+      };
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          json({
+            query: {
+              pages: {
+                '123': {
+                  pageid: 123,
+                  title: 'Synthetic landmark',
+                  pageprops: { wikibase_item: 'Q123' },
+                },
+              },
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          json({
+            entities: {
+              Q123: {
+                id: 'Q123',
+                claims: { P625: kind === 'preferred-ambiguous' ? [claim, claim] : [claim] },
+              },
+            },
+          }),
+        );
+      vi.stubGlobal('fetch', fetch);
+      const found = (
+        await provider().lookup(
+          [{ name: 'Synthetic landmark', area: 'Borgo Blu' }],
+          locatedTrip(),
+          new AbortController().signal,
+        )
+      ).value;
+      expect(found.places).toEqual([]);
+      expect(found.sources).toEqual([]);
+      expect(fetch).toHaveBeenCalledTimes(2);
+    },
+  );
+  it('ignores injected linked entity IDs and never substitutes a non-Earth page coordinate', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(
+      json({
+        query: {
+          pages: {
+            '123': {
+              pageid: 123,
+              title: 'Bad link',
+              pageprops: { wikibase_item: 'https://internal.example' },
+            },
+            '124': {
+              pageid: 124,
+              title: 'Non-Earth',
+              coordinates: [{ lat: 45, lon: 12, globe: 'moon' }],
+              pageprops: { wikibase_item: 'Q124' },
+            },
+          },
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    const found = (
+      await provider().lookup(
+        [{ name: 'Synthetic landmark', area: 'Borgo Blu' }],
+        locatedTrip(),
+        new AbortController().signal,
+      )
+    ).value;
+    expect(found.places).toEqual([]);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  it('does not repeat an area already present in the landmark name', async () => {
+    const fetch = vi.fn().mockResolvedValue(json({ batchcomplete: '' }));
+    vi.stubGlobal('fetch', fetch);
+    await provider().lookup(
+      [{ name: 'Castello di Borgo Blu', area: 'Borgo Blu' }],
+      locatedTrip(),
+      new AbortController().signal,
+    );
+    expect(fetch.mock.calls[0][0].searchParams.get('gsrsearch')).toBe('Castello di Borgo Blu');
+    expect(fetch).toHaveBeenCalledOnce();
+  });
   it('reserves large-context cache-write exposure and blocks it under the original request cap', async () => {
     const live = new LiveAiProviders(
       {

@@ -364,7 +364,9 @@ describe('Phase 0–2 conversation contracts (scripted providers, not language-q
 
   it('turns a landmark-coordinate prose stall into an add preview within the same bounded request', async () => {
     const t = { ...task(['research', 'propose']), changeIntent: 'add-stop' as const };
-    vi.spyOn(provider, 'lookup').mockResolvedValue({ value: discovery(), actualCost: 0 });
+    const lookup = vi
+      .spyOn(provider, 'lookup')
+      .mockResolvedValue({ value: discovery(), actualCost: 0 });
     const plan = vi
       .spyOn(provider, 'plan')
       .mockResolvedValueOnce({
@@ -433,6 +435,11 @@ describe('Phase 0–2 conversation contracts (scripted providers, not language-q
     );
     expect(job.status, job.message).toBe('ready');
     expect(plan).toHaveBeenCalledTimes(3);
+    expect(lookup).toHaveBeenCalledOnce();
+    expect(lookup.mock.calls[0][0]).toEqual([
+      { name: 'Fabbrica del borgo', area: 'Borgo Blu' },
+      { name: 'Museo del borgo', area: 'Borgo Blu' },
+    ]);
     expect(provider.enrich).not.toHaveBeenCalled();
     expect(job.proposals[0].commands.some((c) => c.action.type === 'add')).toBe(true);
     expect(job.proposals[0].warnings.some((w) => w.includes('non un ingresso verificato'))).toBe(

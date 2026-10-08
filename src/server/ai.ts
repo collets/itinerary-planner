@@ -1120,6 +1120,30 @@ export class AiService {
             output.historyRequest
           )
             throw new AiPlanError('invalid', 'La ricerca di un luogo deve precedere la proposta.');
+          // Use the spare name slot for an unresolved public route anchor now:
+          // after lookup there is no second search round. Only active public
+          // stops are eligible; private logistics never leave the itinerary.
+          if (task.changeIntent === 'add-stop' && output.lookups.length < 2) {
+            const activeStops = context.steps.filter((s) => s.kind === 'stop' && 'placeId' in s);
+            const anchor = [...activeStops].reverse().find((step) => {
+              if (!('placeId' in step)) return false;
+              const place = context.places.find((p) => p.id === step.placeId);
+              return (
+                place?.origin === 'itinerary' &&
+                place.publicResearchAllowed &&
+                !place.location.hasCoordinates &&
+                !output.lookups.some((q) => q.name === place.name)
+              );
+            });
+            if (anchor && 'placeId' in anchor) {
+              const place = context.places.find((p) => p.id === anchor.placeId)!;
+              const extra = AiPlaceLookupsSchema.safeParse([
+                ...output.lookups,
+                { name: place.name, area: context.day.destinations.join(', ').slice(0, 80) },
+              ]);
+              if (extra.success) output.lookups = extra.data;
+            }
+          }
           await update((j) => {
             j.output = output;
             j.stage = 'lookup';

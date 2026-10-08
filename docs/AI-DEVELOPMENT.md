@@ -137,8 +137,15 @@ Nearby research queries public coordinates through Italian Wikipedia geosearch a
 bounded extracts, at most two HTTP calls and three nearby candidates. Named
 lookup accepts at most two public landmark names and city/area names from the
 structured model output. The server validates those fields and queries the same
-fixed Wikipedia host, at most two additional HTTP calls and six results. It
-retrieves sourced primary coordinates and short excerpts without requiring the
+fixed Wikipedia host, at most two name-search HTTP calls and six results. For
+articles without GeoData coordinates, one additional fixed-host Wikidata batch
+retrieves the exact linked items' P625 coordinates (at most six IDs). The selected
+rank must contain exactly one usable Earth point with precision no coarser than
+0.001 degrees; ambiguous, deprecated and unknown-value points are excluded. The
+saved source links to the coordinate record and attributes the Italian article.
+An add request may use a spare name slot for an unresolved active public route
+anchor, preserving the one-round/two-name limit and excluding private logistics.
+It retrieves sourced coordinates and short excerpts without requiring the
 user to create a place or enter coordinates. Results without Earth coordinates,
 or more than 25 km from all known trip points, are excluded. The final evidence
 pool is capped at six places/sources; requested places take priority.

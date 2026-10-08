@@ -210,7 +210,9 @@ export async function providerJson(
     parsed.protocol !== 'https:' ||
     parsed.username ||
     parsed.password ||
-    !['api.openai.com', 'api.heigit.org', 'it.wikipedia.org'].includes(parsed.hostname)
+    !['api.openai.com', 'api.heigit.org', 'it.wikipedia.org', 'www.wikidata.org'].includes(
+      parsed.hostname,
+    )
   )
     throw new Error('Provider destination rejected');
   let response: Response;
@@ -737,25 +739,31 @@ export class LiveAiProviders implements AiProviders {
     signal: AbortSignal,
   ): Promise<Charged<AiDiscovery>> {
     const queries = AiPlaceLookupsSchema.parse(input);
-    const candidates: Array<{
+    const pagesFound: Array<{
       pageid: number;
       title: string;
-      lat: number;
-      lon: number;
       extract?: string;
+      coordinates?: Array<{ lat: number; lon: number; globe: string }>;
+      pageprops?: { wikibase_item?: string };
     }> = [];
     const notes: string[] = [];
     const known = trip.plan.places.flatMap((p) => (p.coordinates ? [p.coordinates] : []));
     for (const query of queries) {
       const search = new URL('https://it.wikipedia.org/w/api.php');
+      // Repeating a city already in a landmark name changes full-text ranking
+      // toward city articles (e.g. "Castello di Cracovia Cracovia").
+      const nameIncludesArea = query.name
+        .toLocaleLowerCase('it')
+        .includes(query.area.toLocaleLowerCase('it'));
       search.search = new URLSearchParams({
         action: 'query',
         format: 'json',
         generator: 'search',
-        gsrsearch: `${query.name} ${query.area}`,
+        gsrsearch: nameIncludesArea ? query.name : `${query.name} ${query.area}`,
         gsrlimit: '3',
         gsrnamespace: '0',
-        prop: 'coordinates|extracts',
+        prop: 'coordinates|extracts|pageprops',
+        ppprop: 'wikibase_item',
         coprimary: 'primary',
         exintro: '1',
         explaintext: '1',
@@ -783,12 +791,13 @@ export class LiveAiProviders implements AiProviders {
                   title: z.string().min(1).max(250),
                   index: z.number().int().optional(),
                   extract: z.string().max(2000).optional(),
+                  pageprops: z.object({ wikibase_item: z.string().max(80).optional() }).optional(),
                   coordinates: z
                     .array(
                       z.object({
                         lat: z.number().min(-90).max(90),
                         lon: z.number().min(-180).max(180),
-                        globe: z.literal('earth'),
+                        globe: z.string().max(80),
                       }),
                     )
                     .max(1)
@@ -804,20 +813,99 @@ export class LiveAiProviders implements AiProviders {
       );
       if (pages.length > 3) throw new Error('Research response exceeds candidate bound');
       for (const page of pages) {
-        const point = page.coordinates?.[0];
-        if (
-          !point ||
-          (known.length &&
-            !known.some((c) => haversine(c, { lat: point.lat, lng: point.lon }) <= 25))
-        )
-          continue;
-        if (!candidates.some((c) => c.pageid === page.pageid))
-          candidates.push({ ...page, ...point });
+        if (!pagesFound.some((p) => p.pageid === page.pageid)) pagesFound.push(page);
       }
       notes.push(
         `Ricerca Wikipedia: ${query.name}, ${query.area}. La posizione indica il monumento, non un ingresso verificato.`,
       );
     }
+    // Many landmark articles have no GeoData point. Resolve only the exact
+    // linked Wikidata items in one bounded batch; never search a second identity
+    // or substitute a nearby result's coordinates.
+    const ids = [
+      ...new Set(
+        pagesFound.flatMap((p) =>
+          !p.coordinates?.length && /^Q[1-9]\d{0,14}$/.test(p.pageprops?.wikibase_item ?? '')
+            ? [p.pageprops!.wikibase_item!]
+            : [],
+        ),
+      ),
+    ];
+    const points = new Map<string, { lat: number; lon: number }>();
+    if (ids.length) {
+      const entities = new URL('https://www.wikidata.org/w/api.php');
+      entities.search = new URLSearchParams({
+        action: 'wbgetentities',
+        format: 'json',
+        ids: ids.join('|'),
+        props: 'claims',
+      }).toString();
+      const raw = await providerJson(
+        entities,
+        {
+          headers: {
+            'User-Agent': 'ItineraryPlanner/1.0 (https://github.com/collets/itinerary-planner)',
+          },
+        },
+        signal,
+        1_000_000,
+      );
+      const result = z.object({ entities: z.record(z.string(), z.unknown()) }).parse(raw);
+      for (const id of ids) {
+        const item = z
+          .object({
+            id: z.literal(id),
+            claims: z.object({ P625: z.array(z.unknown()).max(20).optional() }),
+          })
+          .safeParse(result.entities[id]);
+        if (!item.success) continue;
+        const ranked = (item.data.claims.P625 ?? []).flatMap((claim) => {
+          const parsed = z
+            .object({ rank: z.enum(['preferred', 'normal', 'deprecated']), mainsnak: z.unknown() })
+            .safeParse(claim);
+          return parsed.success && parsed.data.rank !== 'deprecated' ? [parsed.data] : [];
+        });
+        const selected = ranked.some((c) => c.rank === 'preferred')
+          ? ranked.filter((c) => c.rank === 'preferred')
+          : ranked;
+        // Ambiguous, unknown-value, non-Earth and coarse points are not route evidence.
+        if (selected.length !== 1) continue;
+        const point = z
+          .object({
+            snaktype: z.literal('value'),
+            property: z.literal('P625'),
+            datavalue: z.object({
+              type: z.literal('globecoordinate'),
+              value: z.object({
+                latitude: z.number().min(-90).max(90),
+                longitude: z.number().min(-180).max(180),
+                precision: z.number().positive().max(0.001),
+                globe: z.literal('http://www.wikidata.org/entity/Q2'),
+              }),
+            }),
+          })
+          .safeParse(selected[0].mainsnak);
+        if (point.success)
+          points.set(id, {
+            lat: point.data.datavalue.value.latitude,
+            lon: point.data.datavalue.value.longitude,
+          });
+      }
+    }
+    const candidates = pagesFound.flatMap((page) => {
+      const direct = page.coordinates?.[0];
+      const wikidataId = direct ? undefined : page.pageprops?.wikibase_item;
+      const point =
+        direct?.globe === 'earth'
+          ? direct
+          : !direct && wikidataId
+            ? points.get(wikidataId)
+            : undefined;
+      return point &&
+        (!known.length || known.some((c) => haversine(c, { lat: point.lat, lng: point.lon }) <= 25))
+        ? [{ ...page, ...point, wikidataId }]
+        : [];
+    });
     const value = this.wikipediaCandidates(candidates.slice(0, 6));
     return {
       actualCost: 0,
@@ -842,6 +930,7 @@ export class LiveAiProviders implements AiProviders {
       lat: number;
       lon: number;
       extract?: string;
+      wikidataId?: string;
     }>,
   ) {
     const date = new Date(this.now()).toISOString().slice(0, 10);
@@ -849,7 +938,7 @@ export class LiveAiProviders implements AiProviders {
       places: candidates.map((c) => ({
         id: `wiki-it-${c.pageid}-${date.replaceAll('-', '')}`,
         name: c.title,
-        address: 'Posizione da Wikipedia; ingresso da verificare.',
+        address: `Posizione da ${c.wikidataId ? 'Wikidata' : 'Wikipedia'}; ingresso da verificare.`,
         description: c.extract?.slice(0, 500) ?? 'Luogo pubblico individuato in Wikipedia.',
         details: '',
         trivia: '',
@@ -860,10 +949,13 @@ export class LiveAiProviders implements AiProviders {
       })),
       sources: candidates.map((c) => ({
         id: `source-wiki-it-${c.pageid}-${date.replaceAll('-', '')}`,
-        title: `Wikipedia · ${c.title}`,
-        url: `https://it.wikipedia.org/?curid=${c.pageid}`,
-        description:
-          'Voce e posizione consultate tramite API Wikipedia. Fonte secondaria; aperture, accesso e costi non verificati. Testo sotto licenza CC BY-SA.',
+        title: `${c.wikidataId ? 'Wikidata / Wikipedia' : 'Wikipedia'} · ${c.title}`,
+        url: c.wikidataId
+          ? `https://www.wikidata.org/wiki/${c.wikidataId}`
+          : `https://it.wikipedia.org/?curid=${c.pageid}`,
+        description: c.wikidataId
+          ? `Coordinate P625 dell’elemento collegato alla voce https://it.wikipedia.org/?curid=${c.pageid}. Coordinate Wikidata CC0; descrizione Wikipedia CC BY-SA. Fonte secondaria; ingresso, aperture e costi non verificati.`
+          : 'Voce e posizione consultate tramite API Wikipedia. Fonte secondaria; aperture, accesso e costi non verificati. Testo sotto licenza CC BY-SA.',
         status: 'verified_secondary' as const,
         verifiedOn: date,
       })),
