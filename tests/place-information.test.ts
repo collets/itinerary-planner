@@ -3,10 +3,49 @@ import { information } from './fixtures/place-information';
 import {
   PlaceInformationSchema,
   informationFresh,
+  informationCovers,
+  mergeInformation,
   visitWindowStatus,
 } from '../src/domain/place-information';
 
 describe('Sourced place information', () => {
+  it('does not treat fresh visitor facts as a completed historical search', () => {
+    const fact = information();
+    fact.researchFocus = 'visitor';
+    const now = Date.parse(fact.checkedAt);
+    expect(informationCovers(fact, 'visitor', fact.visitDate, now)).toBe(true);
+    expect(informationCovers(fact, 'history', fact.visitDate, now)).toBe(false);
+    fact.details = { text: 'Contesto storico documentato.', sourceIds: ['official'] };
+    expect(informationCovers(fact, 'history', fact.visitDate, now)).toBe(true);
+    expect(informationCovers(fact, 'history', '2026-11-13', now)).toBe(false);
+  });
+  it('merges history without erasing visitor facts, reassigning their citations or refreshing their date', () => {
+    const previous = information();
+    const next = information(previous.visitDate, '2026-10-06T12:00:00.000Z');
+    next.researchFocus = 'history';
+    next.openingHours = null;
+    next.price = null;
+    next.website = null;
+    next.details = { text: 'Contesto storico.', sourceIds: ['official'] };
+    next.sources[0] = {
+      id: 'official',
+      title: 'Enciclopedia sintetica',
+      url: 'https://encyclopedia.example/history',
+      kind: 'secondary',
+    };
+    const merged = mergeInformation(previous, next);
+    expect(merged.researchFocus).toBe('history');
+    expect(merged.checkedAt).toBe(previous.checkedAt);
+    expect(merged.price).toMatchObject({ min: 20, max: 25 });
+    expect(merged.openingHours?.windows).toEqual(previous.openingHours?.windows);
+    const source = (id: string) => merged.sources.find((s) => s.id === id)!;
+    expect(source(merged.price!.sourceIds[0]).url).toBe('https://museum.example/');
+    expect(source(merged.details!.sourceIds[0]).url).toBe('https://encyclopedia.example/history');
+    expect(PlaceInformationSchema.safeParse(merged).success).toBe(true);
+    expect(mergeInformation(merged, merged)).toEqual(merged);
+    next.visitDate = '2026-11-13';
+    expect(mergeInformation(previous, next).price).toBeNull();
+  });
   it('requires actual field references and official evidence for practical facts', () => {
     const fact = information();
     expect(PlaceInformationSchema.parse(fact)).toEqual(fact);

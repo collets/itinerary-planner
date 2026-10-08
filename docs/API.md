@@ -93,6 +93,10 @@ require configured web research and no draft. A selected public visit/meal/free-
 stop can be researched directly. General chat uses semantic answer/research/compare/
 propose/undo goals; mixed research and edits are allowed only in proposal mode.
 At most two public places can be researched, independently of routing coordinates.
+For selected-stop information requests, `researchFocus` optionally chooses
+`overview`, `history` or `visitor`. Presets bypass the initial planner. Custom
+questions use `interpretInformationRequest: true` so the planner chooses a typed
+focus; `purpose: information` still prohibits itinerary/location changes and routing.
 Research uses the public name and destination, with verified coordinates when
 available. Persisted tasks retain goals, targets, constraints and a pending
 question. Confirmation replies use that state alongside up to three previous

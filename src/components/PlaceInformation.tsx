@@ -70,7 +70,7 @@ export function PlaceInformation({ information }: { information: Information }) 
       )}
       {!information.price && <p className="small muted">Prezzo del biglietto da verificare.</p>}
       {(information.details || information.trivia || information.entrance) && (
-        <details>
+        <details open={information.researchFocus === 'history'}>
           <summary>Storia, curiosità e informazioni pratiche</summary>
           {(['details', 'trivia', 'entrance'] as const).map(
             (key) =>
@@ -79,8 +79,8 @@ export function PlaceInformation({ information }: { information: Information }) 
                   <h4>
                     {
                       {
-                        details: 'Da sapere',
-                        trivia: 'Uno sguardo in più',
+                        details: 'Storia e contesto',
+                        trivia: 'Curiosità',
                         entrance: 'Ingresso e accesso',
                       }[key]
                     }

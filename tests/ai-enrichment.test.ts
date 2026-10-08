@@ -59,6 +59,51 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe('Bounded hosted research', () => {
+  it('normalizes unique provider citation labels while preserving verified source associations', () => {
+    const raw = response();
+    const facts = JSON.parse(raw.output[1].content![0].text!);
+    facts.sources[0].id = '[source_1]';
+    for (const key of ['description', 'trivia', 'openingHours', 'price', 'website'])
+      facts[key].sourceIds = ['[source_1]'];
+    facts.details = { text: 'Storia documentata.', sourceIds: ['[source_1]'] };
+    raw.output[1].content![0].text = JSON.stringify(facts);
+    const result = readResearch(raw, { ...query, focus: 'history' }, price, 1050000, 4096, now);
+    expect(result.value?.researchFocus).toBe('history');
+    expect(result.value?.sources[0].id).toBe('research-source-1');
+    expect(result.value?.details?.sourceIds).toEqual(['research-source-1']);
+    expect(result.value?.price?.sourceIds).toEqual(['research-source-1']);
+    expect(result.actualCost).toBe(10625);
+    facts.details.sourceIds = ['unseen'];
+    raw.output[1].content![0].text = JSON.stringify(facts);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(readResearch(raw, query, price, 1050000, 4096, now)).toEqual({
+      value: null,
+      actualCost: 10625,
+    });
+    // An unknown original reference must not alias a newly generated ID.
+    facts.details.sourceIds = ['research-source-1'];
+    raw.output[1].content![0].text = JSON.stringify(facts);
+    expect(readResearch(raw, query, price, 1050000, 4096, now).value).toBeNull();
+    facts.details.sourceIds = ['[source_1]'];
+    facts.sources.push({ ...facts.sources[0], url: 'https://other.example/' });
+    raw.output[1].content![0].text = JSON.stringify(facts);
+    expect(readResearch(raw, query, price, 1050000, 4096, now).value).toBeNull();
+  });
+  it('passes a bounded history focus without forwarding free text or changing search ceilings', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(response()), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    await provider().enrich(
+      { ...query, focus: 'history' },
+      new AbortController().signal,
+      'history',
+    );
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(JSON.parse(body.input)).toEqual({ ...query, focus: 'history' });
+    expect(body.instructions).toContain('Wikipedia');
+    expect(body.max_tool_calls).toBe(2);
+  });
   it('reserves every search/model pass, and uses the earlier price expiry', () => {
     expect(researchInputBound(1050000)).toBe(384000);
     expect(researchBound(price, 1050000, 4096, now)).toBe(119072);

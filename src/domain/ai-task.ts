@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Id } from './schema.js';
+import { ResearchFocusSchema } from './place-information.js';
 
 const instant = z.iso.datetime({ offset: true });
 export const AiChangeIntentSchema = z
@@ -21,6 +22,7 @@ export const AiTaskSchema = z
   .object({
     // Optional solely for task state persisted before executable-intent tracking.
     changeIntent: AiChangeIntentSchema.optional(),
+    researchFocus: ResearchFocusSchema.nullable().optional(),
     goals: z
       .array(z.enum(['answer', 'research', 'compare', 'propose', 'undo']))
       .min(1)

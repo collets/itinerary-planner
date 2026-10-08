@@ -94,6 +94,7 @@ describe('OpenAI Responses adapter contracts', () => {
     expect(encoded).not.toContain('\\p{');
     const taskSchema = JSON.parse(JSON.stringify(modelJsonSchema.properties?.task));
     expect(taskSchema.required).toContain('changeIntent');
+    expect(taskSchema.required).toContain('researchFocus');
   });
   it('resolves named landmarks with sourced coordinates, without forwarding the prompt or credentials', async () => {
     const fetch = vi.fn().mockResolvedValue(

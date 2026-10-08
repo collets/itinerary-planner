@@ -3,8 +3,11 @@ import { z } from 'zod';
 import {
   PlaceInformationSchema,
   informationFresh,
+  informationCovers,
+  mergeInformation,
   visitWindowStatus,
   type PlaceInformationUpdate,
+  type ResearchFocus,
 } from '../domain/place-information.js';
 import { validateResearchQuery, type EnrichmentQuery } from './ai-enrichment.js';
 import { confirmationReply, informationQuestion } from '../domain/ai-request.js';
@@ -379,6 +382,7 @@ export class AiService {
         targetStepIds: request.stepId ? [request.stepId] : [],
         constraints: emptyConstraints(),
         pendingQuestion: null,
+        ...(request.researchFocus ? { researchFocus: request.researchFocus } : {}),
       };
     context.task = task;
     context.selectedChoice = selectedChoice;
@@ -410,14 +414,14 @@ export class AiService {
       informationOnly: request.purpose === 'information',
       discovery: inheritedDiscovery,
       informationQueue:
-        request.purpose === 'information'
+        request.purpose === 'information' && !request.interpretInformationRequest
           ? draft.plan.steps.flatMap((s) =>
               s.id === request.stepId && s.kind === 'stop' ? [s.placeId] : [],
             )
           : [],
       stage:
         request.purpose === 'information'
-          ? request.stepId
+          ? request.stepId && !request.interpretInformationRequest
             ? 'information'
             : 'model'
           : request.preference === 'scenic'
@@ -574,7 +578,12 @@ export class AiService {
         );
     }
   }
-  private researchQuery(trip: Trip, placeId: string, dayId: string): EnrichmentQuery {
+  private researchQuery(
+    trip: Trip,
+    placeId: string,
+    dayId: string,
+    focus: ResearchFocus = 'overview',
+  ): EnrichmentQuery {
     const place = trip.plan.places.find((p) => p.id === placeId);
     const c = place?.coordinates;
     if (!place) throw new AiPlanError('invalid', 'Luogo non disponibile.');
@@ -589,6 +598,7 @@ export class AiService {
       ...(publicArea ? { area: publicArea } : {}),
       ...(fresh ? { lat: c.lat, lng: c.lng } : {}),
       visitDate: trip.plan.days.find((d) => d.id === dayId)!.date,
+      focus,
     };
     validateResearchQuery(query);
     return query;
@@ -1046,6 +1056,7 @@ export class AiService {
           // Internal tool/refinement passes cannot silently turn an unfinished
           // write task into a read-only answer. Only a new user turn can do that.
           if (job.task.changeIntent) task.changeIntent = job.task.changeIntent;
+          if (job.task.researchFocus) task.researchFocus = job.task.researchFocus;
           if (job.task.goals.includes('propose') && !task.goals.includes('propose'))
             task.goals.push('propose');
           if (job.task.goals.includes('undo') && !task.goals.includes('undo'))
@@ -1448,8 +1459,13 @@ export class AiService {
           throw new AiPlanError('invalid', 'Ricerca delle informazioni non disponibile.');
         const placeId = job.informationQueue[job.informationIndex];
         const enriched = this.withLocations(withDiscovery(trip, job.discovery), job.locations);
-        const query = this.researchQuery(enriched, placeId, job.request.dayId);
-        const cachePath = `ai/information/${hash({ version: 1, query })}.json`;
+        const query = this.researchQuery(
+          enriched,
+          placeId,
+          job.request.dayId,
+          job.task?.researchFocus ?? job.request.researchFocus ?? 'overview',
+        );
+        const cachePath = `ai/information/${hash({ version: 2, query })}.json`;
         const cached = await this.store.read(cachePath);
         let cachedValue: unknown;
         try {
@@ -1459,9 +1475,10 @@ export class AiService {
         }
         const parsed = PlaceInformationSchema.safeParse(cachedValue);
         const existing = enriched.plan.places.find((p) => p.id === placeId)?.information;
-        let information = informationFresh(existing, query.visitDate, this.now())
+        let information = informationCovers(existing, query.focus!, query.visitDate, this.now())
           ? existing
-          : parsed?.success && informationFresh(parsed.data, query.visitDate, this.now())
+          : parsed?.success &&
+              informationCovers(parsed.data, query.focus!, query.visitDate, this.now())
             ? parsed.data
             : undefined;
         if (!information) {
@@ -1502,6 +1519,7 @@ export class AiService {
             if (!(error instanceof ApiError && error.status === 412)) throw error;
           }
         }
+        information = mergeInformation(existing, information);
         const unchanged =
           job.informationOnly && JSON.stringify(existing) === JSON.stringify(information);
         await update((j) => {
@@ -1524,7 +1542,9 @@ export class AiService {
               message: unchanged
                 ? 'Le informazioni sono già aggiornate per questa data. Nessuna nuova ricerca o modifica.'
                 : saveable
-                  ? 'Ho raccolto le informazioni del luogo. Controlla fonti, data e prezzi prima di confermare.'
+                  ? query.focus === 'history'
+                    ? 'Ho raccolto storia e curiosità del luogo. Controlla le fonti prima di salvare le informazioni.'
+                    : 'Ho raccolto le informazioni del luogo. Controlla fonti, data e prezzi prima di confermare.'
                   : 'Ho raccolto le informazioni del luogo. Consulta fonti, data e prezzi qui sotto; il programma resta invariato.',
               clarification: null,
               lookups: [],

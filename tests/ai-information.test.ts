@@ -61,6 +61,79 @@ async function run(id: string, purpose: 'adapt' | 'information' = 'information',
   return { job, original };
 }
 describe('Place research orchestration and approval', () => {
+  it('interprets a custom historical question without coordinates or routing and preserves practical information on approval', async () => {
+    const current = await trips.read('example-trip');
+    const original = await trips.mutate('example-trip', current.etag, (trip) => {
+      delete trip.plan.places.find((p) => p.id === 'blue-museum')!.coordinates;
+      const facts = information();
+      facts.researchFocus = 'visitor';
+      trip.plan.places.find((p) => p.id === 'blue-museum')!.information = facts;
+    });
+    const historical = information();
+    historical.researchFocus = 'history';
+    historical.openingHours = null;
+    historical.price = null;
+    historical.website = null;
+    historical.details = { text: 'Origini del museo sintetico.', sourceIds: ['official'] };
+    const plan = vi.spyOn(provider, 'plan').mockResolvedValue({
+      actualCost: 0,
+      value: {
+        message: 'Cerco la storia del museo.',
+        clarification: null,
+        lookups: [],
+        informationRequests: ['museum'],
+        options: [],
+        task: {
+          goals: ['research'],
+          targetStepIds: ['museum'],
+          constraints: emptyConstraints(),
+          pendingQuestion: null,
+          researchFocus: 'history',
+        },
+      },
+    });
+    provider.enrich.mockResolvedValue({ value: historical, actualCost: 10000 });
+    const route = vi.spyOn(provider, 'route');
+    const request = AiRequestSchema.parse({
+      id: 'historical-question',
+      dayId: 'day-one',
+      stepId: 'museum',
+      purpose: 'information',
+      interpretInformationRequest: true,
+      text: 'Raccontami la storia e le curiosità di questo museo',
+    });
+    let job = await ai.create('example-trip', request, original.etag);
+    for (let n = 0; n < 8 && ['queued', 'planning'].includes(job.status); n++)
+      job = await ai.advance('example-trip', job.id);
+    expect(job.status, job.message).toBe('ready');
+    expect(plan).toHaveBeenCalledOnce();
+    expect(provider.enrich).toHaveBeenCalledOnce();
+    expect(provider.enrich.mock.calls[0][0]).toEqual({
+      name: 'Museo del borgo',
+      area: 'Borgo Blu',
+      visitDate: '2026-11-12',
+      focus: 'history',
+    });
+    expect(route).not.toHaveBeenCalled();
+    const proposal = job.proposals[0];
+    expect(proposal.commands).toEqual([]);
+    expect(proposal.routes).toEqual([]);
+    const applied = await ai.apply(
+      'example-trip',
+      proposal.id,
+      proposal.previewHash,
+      original.etag,
+    );
+    expect(applied.trip.plan.steps).toEqual(original.trip.plan.steps);
+    expect(applied.trip.plan.days).toEqual(original.trip.plan.days);
+    expect(applied.trip.plan.costs).toEqual(original.trip.plan.costs);
+    expect(applied.trip.state).toEqual(original.trip.state);
+    const facts = applied.trip.plan.places.find((p) => p.id === 'blue-museum')!.information!;
+    expect(facts.details?.text).toBe(historical.details?.text);
+    expect(facts.price?.min).toBe(20);
+    expect(facts.openingHours?.windows).toEqual(information().openingHours!.windows);
+    expect(await ai.budget.status()).toMatchObject({ active: 0, reserved: 0 });
+  });
   it.each([
     'Dammi informazioni sui prezzi e gli orari di apertura',
     'Quali sono i prezzi e gli orari?',
@@ -92,6 +165,7 @@ describe('Place research orchestration and approval', () => {
       name: 'Museo del borgo',
       area: 'Borgo Blu',
       visitDate: '2026-11-12',
+      focus: 'overview',
     });
     expect(JSON.stringify(provider.enrich.mock.calls)).not.toContain('PRIVATE');
     expect(job.proposals[0].commands).toEqual([]);
@@ -354,6 +428,7 @@ describe('Place research orchestration and approval', () => {
       lat: 45,
       lng: 12,
       visitDate: '2026-11-12',
+      focus: 'overview',
     });
     expect(await ai.budget.status()).toMatchObject({ active: 0, reserved: 0, monthly: 10000 });
   });

@@ -403,7 +403,16 @@ New/replacement stops can run one bounded information round (maximum two public
 places), then replan within the three-pass ceiling with date-specific opening windows. Existing visit/meal/free-time
 stops offer **Aggiorna informazioni con AI**. The shortcut prepares an explicit
 request; it does not spend until sent. Explicit information shortcuts bypass the
-initial planner when the public stop is selected. General chat uses semantic task
+initial planner when the public stop is selected. The planner uses semantic task
+goals and a typed `researchFocus` (`overview`, `history`, `visitor`). The shortcut
+offers **Storia e curiosità** and **Orari, prezzi e accesso** presets. Custom
+questions in information mode set `interpretInformationRequest: true` and use
+the planner to choose focus while keeping information-only write restrictions.
+History prioritizes origins, people/events and evidenced curiosities from museum
+history pages, Wikipedia or other reliable encyclopedias; visitor facts may be
+unknown. Legends require citations and explicit labelling. No extra tool calls,
+automatic retries or spending allowances are granted for historical research.
+General chat uses semantic task
 goals instead of keyword routing. The planner selects active public stop IDs in
 `informationRequests`, or evidenced unscheduled candidate IDs in
 `placeInformationRequests`. Its strict provider schema distinguishes those IDs.
@@ -422,8 +431,8 @@ without disabling existing itinerary assistance. No new account or runtime is
 needed. Research uses the configured Responses model, fixed OpenAI endpoint,
 `store:false`, standard tier, no redirects/retries, `parallel_tool_calls:false`,
 `max_tool_calls:2`, low search context and the ordinary output/40-second ceilings.
-Only public name, public destination, optional fresh verified position and visit
-date enter its input; no raw user
+Only public name, public destination, optional fresh verified position, visit
+date and the typed research focus enter its input; no raw user
 question, itinerary, traveler, accommodation, booking or ticket data.
 Manual stops need no coordinates for visitor information: hosted research resolves
 the place from its name and destination. Without coordinates a cited `identifiedPlace`
@@ -447,6 +456,9 @@ update fails without changing the stop if no facts are acceptable. Unknown charg
 budget failures and cancellations still stop the request.
 
 Citations must match actual hosted search sources or URL annotations. Public
+provider citation labels are remapped to application IDs only through a unique,
+bounded source table. Unknown references, duplicates and fabricated URLs remain
+invalid; normalization does not weaken evidence validation. Public
 HTTPS links have no credentials, query, fragment or local/IP destinations and
 are only rendered, never fetched by our server. Official classification is a
 researched assessment; extracted facts can be mistaken. Practical fields require
@@ -455,9 +467,12 @@ Prices name the admission product and never imply availability or purchase.
 Check dates describe consultation, not a guarantee against subsequent closures.
 The final projected schedule warns when it lies outside sourced opening windows.
 
-Caches are private and reusable for 24 hours only for the same public identity
-and visit date. A current approved overlay is reused without another provider
-call; a repeated information update reports that it is already current.
+Caches are private and reusable for 24 hours only for the same public identity,
+visit date and focus (version 2 cache keys). A fresh visitor-only overlay cannot
+hide missing historical content. A current approved overlay covering that focus
+is reused without another provider call. Partial updates retain unrelated prior
+facts, remap citations by URL and keep the oldest consultation date when older
+facts remain. All existing source/size limits still apply to the merged overlay.
 Approval includes an information widget using the same renderer as stop details;
 financial amounts remain untouched. General address geocoding, live booking
 availability and private accommodation research remain outside this capability.

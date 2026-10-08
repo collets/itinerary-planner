@@ -2,7 +2,11 @@ import { z } from 'zod';
 import { AiTaskSchema, type AiTask } from './ai-task.js';
 import { AI_CAPABILITIES, AI_LIMITS } from './ai-capabilities.js';
 import { dayInsights, undoChoices } from './ai-insights.js';
-import { PlaceInformationSchema, type PlaceInformationUpdate } from './place-information.js';
+import {
+  PlaceInformationSchema,
+  ResearchFocusSchema,
+  type PlaceInformationUpdate,
+} from './place-information.js';
 import { Id, SafeUrl, PlaceSchema, SourceSchema, TripSchema, type Trip } from './schema.js';
 import {
   TravelCommandSchema,
@@ -36,6 +40,8 @@ export const AiRequestSchema = z
     text: z.string().trim().min(1).max(2000),
     preference: z.enum(['fastest', 'scenic']).default('fastest'),
     purpose: z.enum(['adapt', 'information']).optional(),
+    researchFocus: ResearchFocusSchema.optional(),
+    interpretInformationRequest: z.boolean().optional(),
     draft: TravelCommandSchema.optional(),
   })
   .strict()
@@ -396,6 +402,7 @@ export function aiContext(
       preference: request.preference,
       stepId: request.stepId ?? null,
       purpose: request.purpose ?? 'adapt',
+      researchFocus: request.researchFocus ?? null,
     },
     steps: steps.map((s) => ({
       id: s.id,

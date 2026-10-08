@@ -97,6 +97,41 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Assistant conversation widgets and private local advice', () => {
+  it.each(['preset', 'custom'])(
+    'submits an information-only historical %s request',
+    async (mode) => {
+      doubles.get.mockResolvedValue(undefined);
+      render(
+        <AiAssistant
+          target={{ dayId: 'day-one', stepId: 'museum', purpose: 'information' }}
+          onTarget={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      const submit = screen.getByRole('button', { name: 'Invia richiesta' });
+      await waitFor(() => expect(submit).toBeEnabled());
+      fireEvent.change(screen.getByRole('combobox', { name: 'Tipo di ricerca' }), {
+        target: { value: 'history' },
+      });
+      if (mode === 'custom')
+        fireEvent.change(screen.getByRole('textbox'), {
+          target: { value: 'Chi lavorava in questa fabbrica durante la guerra?' },
+        });
+      fireEvent.click(submit);
+      await waitFor(() =>
+        expect(doubles.request.mock.calls.filter((args) => args[1] === 'POST')).toHaveLength(1),
+      );
+      const body = doubles.request.mock.calls.find((args) => args[1] === 'POST')![2];
+      expect(body).toMatchObject({ purpose: 'information', stepId: 'museum' });
+      if (mode === 'preset') {
+        expect(body.researchFocus).toBe('history');
+        expect(body.interpretInformationRequest).toBeUndefined();
+      } else {
+        expect(body.interpretInformationRequest).toBe(true);
+        expect(body.researchFocus).toBeUndefined();
+      }
+    },
+  );
   it('does not start a paid request on open, and sends a validated choice only on explicit interaction', async () => {
     render(
       <AiAssistant

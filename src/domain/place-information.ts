@@ -28,6 +28,8 @@ const clock = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 const window = z
   .object({ opens: clock, closes: z.string().regex(/^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/) })
   .strict();
+export const ResearchFocusSchema = z.enum(['overview', 'history', 'visitor']);
+export type ResearchFocus = z.infer<typeof ResearchFocusSchema>;
 export const PlaceResearchSchema = z
   .object({
     // Optional for overlays saved before public-name research was supported.
@@ -76,6 +78,7 @@ export const PlaceResearchSchema = z
 export const PlaceInformationSchema = PlaceResearchSchema.extend({
   checkedAt: z.iso.datetime(),
   visitDate: z.iso.date(),
+  researchFocus: ResearchFocusSchema.optional(),
 })
   .strict()
   .superRefine((value, ctx) => {
@@ -153,6 +156,80 @@ export function informationFresh(
     Date.parse(information.checkedAt) <= now &&
     now - Date.parse(information.checkedAt) < 24 * 3600_000
   );
+}
+/** A fresh price lookup must not suppress a later request for missing history. */
+export function informationCovers(
+  information: PlaceInformation | undefined,
+  focus: ResearchFocus,
+  visitDate: string,
+  now: number,
+) {
+  return (
+    informationFresh(information, visitDate, now) &&
+    !!information &&
+    (information.researchFocus === focus ||
+      (focus === 'overview' && information.researchFocus === undefined) ||
+      (focus === 'history' && !!information.details && !!information.trivia) ||
+      (focus === 'visitor' && !!information.openingHours && !!information.price))
+  );
+}
+
+/** Preserve unrelated sourced facts without presenting their date as refreshed. */
+export function mergeInformation(
+  previous: PlaceInformation | undefined,
+  next: PlaceInformation,
+): PlaceInformation {
+  if (!previous || previous.visitDate !== next.visitDate) return next;
+  if (JSON.stringify(previous) === JSON.stringify(next)) return next;
+  const fields = [
+    'identifiedPlace',
+    'description',
+    'details',
+    'trivia',
+    'entrance',
+    'openingHours',
+    'price',
+    'website',
+    'bookingUrl',
+  ] as const;
+  const sources = new Map<string, PlaceInformation['sources'][number]>();
+  const ids = new Map<string, string>();
+  const remap = (
+    field: NonNullable<PlaceInformation[(typeof fields)[number]]>,
+    origin: PlaceInformation,
+  ) => ({
+    ...field,
+    sourceIds: field.sourceIds.map((id) => {
+      const source = origin.sources.find((s) => s.id === id)!;
+      if (!ids.has(source.url)) ids.set(source.url, `info-source-${ids.size + 1}`);
+      const canonical = ids.get(source.url)!;
+      const existing = sources.get(canonical);
+      sources.set(
+        canonical,
+        existing?.kind === 'official' && source.kind !== 'official'
+          ? existing
+          : { ...source, id: canonical },
+      );
+      return canonical;
+    }),
+  });
+  const result = { ...next };
+  let retained = false;
+  for (const key of fields) {
+    const newer = next[key],
+      older = previous[key];
+    const fact = newer ?? older;
+    if (fact) {
+      // Each field keeps its original URL association even if providers reuse IDs.
+      Object.assign(result, { [key]: remap(fact, newer ? next : previous) });
+      if (!newer && older) retained = true;
+    }
+  }
+  result.sources = [...sources.values()];
+  result.warnings = [...new Set([...next.warnings, ...previous.warnings])].slice(0, 6);
+  if (retained && Date.parse(previous.checkedAt) < Date.parse(next.checkedAt))
+    result.checkedAt = previous.checkedAt;
+  return PlaceInformationSchema.parse(result);
 }
 /** Checks the cited date's local window; unknown hours never imply admission. */
 export function visitWindowStatus(

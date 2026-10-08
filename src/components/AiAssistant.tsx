@@ -5,6 +5,7 @@ import { request, fetchTrip, syncPending, type TripResult } from '../client/api'
 import { db, journal, saveAiAdvice } from '../client/db';
 import { projectAiProposal, type AiRequest, type AiProposal } from '../domain/ai';
 import type { TravelCommand } from '../domain/travel';
+import type { ResearchFocus } from '../domain/place-information';
 import type { AiJobView } from '../server/ai';
 import { PlaceInformation } from './PlaceInformation';
 import { Modal } from './Modal';
@@ -30,8 +31,15 @@ type SavedAdvice = {
   turns?: Array<{ text: string; job: AiJobView }>;
 };
 const pending = new Set(['queued', 'running', 'planning', 'routing']);
-const informationPrompt =
-  'Cerca e aggiorna orari, prezzi, informazioni e curiosità di questa tappa per la data della visita, citando le fonti.';
+const informationPrompts: Record<ResearchFocus, string> = {
+  overview:
+    'Cerca e aggiorna orari, prezzi, informazioni e curiosità di questa tappa per la data della visita, citando le fonti.',
+  history:
+    'Cerca la storia di questa tappa e alcune curiosità documentate, usando Wikipedia, il sito del museo o altre fonti affidabili. Indica le fonti.',
+  visitor:
+    'Cerca orari, prezzi e informazioni di accesso per questa tappa, usando fonti ufficiali.',
+};
+const informationPrompt = informationPrompts.overview;
 const informationFields = [
   ['identifiedPlace', 'luogo individuato'],
   ['description', 'descrizione'],
@@ -70,6 +78,7 @@ export function AiAssistant({
         : '',
   );
   const [draft, setDraft] = useState(target.draft);
+  const [researchFocus, setResearchFocus] = useState<ResearchFocus>('overview');
   const [preference, setPreference] = useState<'fastest' | 'scenic'>('fastest');
   const [saved, setSaved] = useState<SavedAdvice | undefined>();
   const [job, setJob] = useState<AiJobView | undefined>();
@@ -98,8 +107,14 @@ export function AiAssistant({
         if (cached && !target.draft) {
           setSaved(cached);
           setJob(cached.job);
-          setText(cached.text || (target.purpose === 'information' ? informationPrompt : ''));
+          setText(
+            cached.text ||
+              (target.purpose === 'information'
+                ? informationPrompts[cached.request?.researchFocus ?? 'overview']
+                : ''),
+          );
           setPreference(cached.preference);
+          setResearchFocus(cached.request?.researchFocus ?? 'overview');
           setDraft(cached.draft);
           if (navigator.onLine && cached.request) {
             const version = activity.current;
@@ -211,6 +226,11 @@ export function AiAssistant({
             ...(choice ? { choiceId: choice.id } : {}),
             preference,
             purpose: target.purpose ?? 'adapt',
+            ...(target.purpose === 'information'
+              ? (choice?.label ?? text) === informationPrompts[researchFocus]
+                ? { researchFocus }
+                : { interpretInformationRequest: true }
+              : {}),
             ...(draft ? { draft } : {}),
           },
           baseEtag: fresh.etag,
@@ -328,6 +348,24 @@ export function AiAssistant({
                   Torna alle modifiche del programma
                 </button>
               </p>
+            )}
+            {target.purpose === 'information' && (
+              <label>
+                Tipo di ricerca
+                <select
+                  value={researchFocus}
+                  disabled={busy || (!!job && pending.has(job.status))}
+                  onChange={(e) => {
+                    const focus = e.target.value as ResearchFocus;
+                    setResearchFocus(focus);
+                    setText(informationPrompts[focus]);
+                  }}
+                >
+                  <option value="overview">Panoramica</option>
+                  <option value="history">Storia e curiosità</option>
+                  <option value="visitor">Orari, prezzi e accesso</option>
+                </select>
+              </label>
             )}
             <label>
               Giornata

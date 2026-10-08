@@ -181,6 +181,13 @@ Sources have stable local IDs, HTTPS URLs, titles and a researched `kind`
 human guarantee. These source IDs are local to the information object, rather
 than references to `plan.sources`.
 
+Optional `researchFocus` records `overview`, `history` or `visitor`. Historical
+research uses `details` for context and `trivia` for documented curiosities;
+secondary sources such as Wikipedia are allowed for those fields. A focused
+update retains unrelated approved facts and their URL associations. If any older
+fact is retained, `checkedAt` remains the oldest consultation date conservatively;
+researching history does not present prior prices/hours as newly checked.
+
 `openingHours` contains sourced text, `visitStatus` (`open`, `closed`, `unknown`)
 and at most three local `opens`/`closes` intervals. Only use intervals explicitly
 applicable to `visitDate`; otherwise use unknown with an empty window list.
@@ -195,7 +202,8 @@ entry as itinerary edits. Undo restores only the information overlay of affected
 places and respects intervening edits; it does not roll back financial history.
 Research caches are private server data, expire for reuse after 24 hours, and
 are scoped to the public name/destination, optional verified coordinates and exact
-visit date. Optional `identifiedPlace` is a cited name/city used to make a public
+visit date and research focus. A fresh visitor-only lookup does not suppress a
+request for missing history. Optional `identifiedPlace` is a cited name/city used to make a public
 name match visible in review; old overlays without it remain valid. Visitor
 information can be researched for manual stops without coordinates, but this does
 not itself supply routing coordinates or change the saved location. Never place
