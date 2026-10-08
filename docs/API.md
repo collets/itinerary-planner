@@ -77,13 +77,13 @@ The command body is `{id, action, routes, expected, at}`. `id` is a unique stabl
 or `live`. AI is disabled unless both provider configuration and the independent
 durable ledger allow it. Existing browser sessions/agent tokens can use:
 
-| Method | Path under `/api/v2/trips/{id}/ai` | Behavior                                                                                                              |
-| ------ | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| POST   | `/requests`                        | `{id, dayId, stepId?, parentJobId?, choiceId?, text, preference?, purpose?, draft?}`; current X-Trip-Version required |
-| GET    | `/requests/{jobId}`                | Status, Italian message and validated proposals; read only                                                            |
-| POST   | `/requests/{jobId}/advance`        | One claimed/reserved stage; `{}` body; no automatic provider retries                                                  |
-| POST   | `/requests/{jobId}/cancel`         | Stop future work; dispatched liabilities remain held                                                                  |
-| POST   | `/proposals/{proposalId}/apply`    | `{previewHash}` plus current X-Trip-Version; exact proposal approval and one atomic write                             |
+| Method | Path under `/api/v2/trips/{id}/ai` | Behavior                                                                                                                                                            |
+| ------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/requests`                        | `{id, dayId, stepId?, parentJobId?, choiceId?, text, preference?, purpose?, researchFocus?, interpretInformationRequest?, draft?}`; current X-Trip-Version required |
+| GET    | `/requests/{jobId}`                | Status, Italian message and validated proposals; read only                                                                                                          |
+| POST   | `/requests/{jobId}/advance`        | One claimed/reserved stage; `{}` body; no automatic provider retries                                                                                                |
+| POST   | `/requests/{jobId}/cancel`         | Stop future work; dispatched liabilities remain held                                                                                                                |
+| POST   | `/proposals/{proposalId}/apply`    | `{previewHash}` plus current X-Trip-Version; exact proposal approval and one atomic write                                                                           |
 
 Use a stable unique request ID for network retries. Create is idempotent only for
 the same payload, trip and original version; different payloads with the same ID

@@ -33,6 +33,33 @@ used the existing temporary shared libraries/browser wrapper; CI installs the
 required system packages using the unchanged workflow. These checks made no
 paid provider calls and did not change the remote ledger.
 
+### Focused historical research on 2026-10-08
+
+`pnpm check` passed 260 tests, the native server smoke and production build.
+New contracts cover unique provider citation-label normalization, rejection of
+ambiguous/unknown labels and fabricated evidence, typed historical focus, a
+fresh visitor overlay with missing history, retained practical facts/citations
+and consultation dates, and preset/custom information-only UI requests. No
+additional local browser batch was run; CI on `71db9cb` passed the existing
+browser gate.
+
+One disposable live request on `71db9cb` asked in natural language for the
+history and documented curiosities of Fabbrica di Schindler, without saved
+coordinates. One planner pass selected historical research; the information
+stage returned both historical context and curiosities citing the Museum of
+Krakow and USHMM encyclopedia. It required neither lookup nor routing. Approval
+saved only the sourced overlay, preserving schedule, operational state and cost
+estimates. The existing manual-information trip was unchanged and the disposable
+fixture was removed. This verifies one targeted interaction, not a general
+historical-accuracy or language-quality success rate.
+
+The request's known cost was 15,213 microdollars ($0.015213); the ledger accounted
+for 691,663 microdollars ($0.691663) of the existing $1 pilot at completion,
+including other usage and previous conservative settlements. No reservations
+or active runs remained, AI stayed enabled only in its isolated preview, and
+budgets, tool ceilings and provider prices were unchanged. Evidence remains in
+ignored private local data.
+
 ### Landmark-add follow-up on 2026-10-08
 
 `pnpm check` passed 253 tests, the native server smoke and production build.
