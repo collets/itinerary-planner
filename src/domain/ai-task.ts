@@ -8,7 +8,12 @@ export const AiChangeIntentSchema = z
   .nullable();
 export const AiConstraintsSchema = z
   .object({
-    keepStepIds: z.array(Id).max(60),
+    keepStepIds: z
+      .array(Id)
+      .max(60)
+      .describe(
+        'Activities whose exact start and end must stay unchanged. Exclude activities being retimed; keeping a place in the itinerary is not a time lock.',
+      ),
     avoidPlaceIds: z.array(Id).max(10),
     requireOpenPlaceIds: z.array(Id).max(2),
     maxWalkingMinutes: z.number().int().min(0).max(720).nullable(),
