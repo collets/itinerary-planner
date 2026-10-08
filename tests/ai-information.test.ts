@@ -46,13 +46,13 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await rm(directory, { recursive: true, force: true });
 });
-async function run(id: string, purpose: 'adapt' | 'information' = 'information') {
+async function run(id: string, purpose: 'adapt' | 'information' = 'information', text?: string) {
   const original = await trips.read('example-trip');
   const request = AiRequestSchema.parse({
     id,
     dayId: 'day-one',
     stepId: 'museum',
-    text: purpose === 'information' ? 'Cerca le informazioni' : 'Aggiungi il giardino',
+    text: text ?? (purpose === 'information' ? 'Cerca le informazioni' : 'Aggiungi il giardino'),
     purpose,
   });
   let job = await ai.create('example-trip', request, original.etag);
@@ -414,12 +414,19 @@ describe('Place research orchestration and approval', () => {
     expect((await ai.budget.read()).ledger.runs).toHaveLength(0);
   });
   it.each([true, false])(
-    'researches added stops once and preserves approval when optional evidence is accepted=%s',
+    'explicitly combines visitor research and an added visit, preserving approval when evidence is accepted=%s',
     async (accepted) => {
       if (!accepted) provider.enrich.mockResolvedValue({ value: null, actualCost: 10000 });
       const output = {
-        message: 'Aggiungo il giardino.',
+        message: 'Aggiungo il museo.',
         clarification: null,
+        task: {
+          goals: ['research', 'propose'] as Array<'research' | 'propose'>,
+          targetStepIds: ['museum'],
+          constraints: emptyConstraints(),
+          pendingQuestion: null,
+        },
+        informationRequests: ['museum'],
         lookups: [],
         options: [
           {
@@ -429,8 +436,8 @@ describe('Place research orchestration and approval', () => {
               {
                 type: 'add' as const,
                 stepId: null,
-                placeId: 'blue-garden',
-                title: 'Il giardino',
+                placeId: 'blue-museum',
+                title: 'Il museo',
                 minutes: null,
                 start: '2026-11-12T12:00:00+01:00',
                 durationMinutes: 30,
@@ -442,7 +449,10 @@ describe('Place research orchestration and approval', () => {
           },
         ],
       };
-      const plan = vi.spyOn(provider, 'plan').mockResolvedValue({ value: output, actualCost: 0 });
+      const plan = vi
+        .spyOn(provider, 'plan')
+        .mockResolvedValueOnce({ value: output, actualCost: 0 })
+        .mockResolvedValue({ value: { ...output, informationRequests: [] }, actualCost: 0 });
       vi.spyOn(provider, 'route').mockImplementation(async (query) => ({
         actualCost: 0,
         value: {
@@ -460,12 +470,16 @@ describe('Place research orchestration and approval', () => {
           citations: [],
         },
       }));
-      const { job, original } = await run('add-with-research', 'adapt');
+      const { job, original } = await run(
+        'add-with-research',
+        'adapt',
+        'Aggiungi una seconda visita al museo e cercane orari e prezzi',
+      );
       expect(job.status, job.message).toBe('ready');
       expect(plan).toHaveBeenCalledTimes(2);
       expect(provider.enrich).toHaveBeenCalledTimes(1);
       const visitInformation = plan.mock.calls[1][0].places.find(
-        (p) => p.id === 'blue-garden',
+        (p) => p.id === 'blue-museum',
       )?.visitInformation;
       if (accepted)
         expect(visitInformation).toMatchObject({
@@ -481,7 +495,7 @@ describe('Place research orchestration and approval', () => {
         expect(await ai.budget.status()).toMatchObject({ monthly: 10000, reserved: 0, active: 0 });
       }
       const projected = projectAiProposal(original.trip, job.proposals[0]);
-      expect(projected.plan.places.find((p) => p.id === 'blue-garden')!.information).toEqual(
+      expect(projected.plan.places.find((p) => p.id === 'blue-museum')!.information).toEqual(
         accepted ? information() : undefined,
       );
       expect((await trips.read('example-trip')).etag).toBe(original.etag);

@@ -95,9 +95,11 @@ atomic proposal; there is no separate preliminary approval step.
 Landmark coordinates do not certify a visitor entrance. Proposals explicitly
 show that limitation. It does not prevent an estimated exterior visit and a
 measured walk to the sourced point. A user requirement for verified interior
-opening still needs applicable evidence. Optional automatic visitor research
-requires a remaining reasoning pass; explicit research remains bounded by the
-existing operation and spending limits.
+opening still needs applicable evidence. A plain add does not automatically
+dispatch paid visitor research: location and route evidence can produce an
+estimated exterior proposal while hours/prices remain unknown. Explicit visitor
+research and verified-opening requirements still use the bounded information
+tools and existing operation/spending limits.
 
 `AiService` is a bounded application orchestrator, not an unrestricted agent loop.
 Stages persist independently: optional nearby research, up to three structured
@@ -149,6 +151,10 @@ It retrieves sourced coordinates and short excerpts without requiring the
 user to create a place or enter coordinates. Results without Earth coordinates,
 or more than 25 km from all known trip points, are excluded. The final evidence
 pool is capped at six places/sources; requested places take priority.
+
+Linked-coordinate contracts checked on 2026-10-08:
+[MediaWiki page properties](https://www.mediawiki.org/wiki/API:Pageprops) and
+[Wikidata data access](https://www.wikidata.org/wiki/Help:Data_access).
 
 Nearby suggestions are optional: a free provider or response-contract failure
 returns an empty evidence pool and an uncertainty note, allowing the separate
@@ -427,7 +433,7 @@ incomplete or uncited facts. Unknown charges remain held for operator resolution
 All stages count against the existing request/day/month/operation limits. No
 price/budget increase or failed-call retry occurs automatically.
 
-If automatically researched facts are rejected after known usage is settled,
+If researched facts in a combined research/change request are rejected after known usage is settled,
 itinerary planning can continue with a visible warning and no information overlay.
 The independent place and route evidence remains mandatory. An explicit information
 update fails without changing the stop if no facts are acceptable. Unknown charges,

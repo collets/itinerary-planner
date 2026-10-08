@@ -33,6 +33,33 @@ used the existing temporary shared libraries/browser wrapper; CI installs the
 required system packages using the unchanged workflow. These checks made no
 paid provider calls and did not change the remote ledger.
 
+### Landmark-add follow-up on 2026-10-08
+
+`pnpm check` passed 252 tests, the native server smoke and production build.
+New regressions cover executable add intents rather than prose promises,
+post-lookup clarification/action conflicts, strict three-pass accounting,
+public POI location overlays, an unresolved public anchor plus a new stop in
+one atomic approval, and no implicit paid visitor research for plain adds.
+Provider tests cover exact linked Wikidata coordinates, rank/ambiguity/Earth/
+precision checks, bounded hosts/IDs, attribution and duplicate city search terms.
+No additional local browser batch was run; the existing CI browser gate remains.
+
+A free provider check found Fabbrica Schindler through its linked Wikidata P625
+record and Castello del Wawel through Wikipedia coordinates. The next disposable
+live add completed two planner passes and location lookup, then an implicitly
+scheduled visitor-information call violated the usage bound. AI was disabled;
+its 119,072-microdollar reservation remains held, with exact invoice usage unknown.
+The ledger total including the hold is 628,476 microdollars of the existing
+1,000,000-microdollar pilot allowance. The original itinerary was not changed,
+and no new factory stop was approved. Live add/route/apply acceptance is pending.
+
+The follow-up removes implicit visitor research from plain adds; explicit
+information requests and verified-opening requirements remain supported.
+Numeric-only usage diagnostics identify which ceiling failed without logging
+provider text. Further paid acceptance needs usage verification or explicit
+owner-approved conservative settlement of this specific hold; no retry or
+automatic reconciliation of the interrupted operation is permitted.
+
 ## Coverage
 
 | Interactions            | Deterministic checks                                                                                                                                                               |

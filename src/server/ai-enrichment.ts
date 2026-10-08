@@ -141,8 +141,20 @@ export function readResearch(
     response.usage.input_tokens > researchInputBound(contextWindow) ||
     response.usage.output_tokens > outputTokens ||
     calls.length > RESEARCH_TOOL_LIMIT
-  )
+  ) {
+    // Numeric usage diagnostics only: no provider text, queries, source URLs,
+    // identities or credentials. A violated bound still retains its reservation.
+    console.warn('AI research usage bound exceeded', {
+      inputTokens: response.usage.input_tokens,
+      inputLimit: researchInputBound(contextWindow),
+      outputTokens: response.usage.output_tokens,
+      outputLimit: outputTokens,
+      toolCalls: calls.length,
+      toolLimit: RESEARCH_TOOL_LIMIT,
+      completedTools: calls.filter((c) => c.status === 'completed').length,
+    });
     throw new Error('Research usage violated verified bound');
+  }
   // Counting all actions conservatively includes page-open/find actions, even
   // though published search fees apply to search actions.
   const actualCost = maximumCost(

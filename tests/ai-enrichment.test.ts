@@ -197,4 +197,26 @@ describe('Bounded hosted research', () => {
     });
     expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
   });
+  it('reports numeric usage-bound diagnostics without accepting facts, retrying or leaking content', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const raw = response();
+    raw.usage.output_tokens = 4097;
+    raw.output[1].content![0].text = 'SECRET_REPLY';
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(raw)));
+    vi.stubGlobal('fetch', fetch);
+    await expect(
+      provider().enrich(query, new AbortController().signal, 'bounded-diagnostic'),
+    ).rejects.toThrow('bound');
+    expect(warn).toHaveBeenCalledWith('AI research usage bound exceeded', {
+      inputTokens: 1000,
+      inputLimit: 384000,
+      outputTokens: 4097,
+      outputLimit: 4096,
+      toolCalls: 1,
+      toolLimit: 2,
+      completedTools: 1,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET');
+    expect(fetch).toHaveBeenCalledOnce();
+  });
 });

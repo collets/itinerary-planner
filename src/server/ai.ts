@@ -1233,25 +1233,10 @@ export class AiService {
             'La ricerca web non è disponibile. Puoi consultare le informazioni già salvate e le fonti della tappa.',
           );
         if (job.informationRound === 0 && provider.informationAvailable && provider.enrich) {
-          const ids = [
-            ...new Set([
-              ...requestedInformation,
-              // Automatic visitor research is optional, and needs a remaining
-              // reasoning pass. Never spend on it when no pass can use the result.
-              ...(job.modelRounds < AI_LIMITS.modelRounds
-                ? output.options.flatMap((o) =>
-                    o.actions
-                      .filter((a) => a.type === 'add')
-                      .flatMap((a) =>
-                        a.placeId &&
-                        context.places.find((p) => p.id === a.placeId)?.publicResearchAllowed
-                          ? [a.placeId]
-                          : [],
-                      ),
-                  )
-                : []),
-            ]),
-          ];
+          // A plain add already has independent sourced location/route evidence.
+          // Do not turn it into unrequested paid visitor research. Explicit
+          // information tools and hard verified-opening requests remain supported.
+          const ids = [...new Set(requestedInformation)];
           if (ids.length > 2)
             throw new AiPlanError(
               'invalid',
