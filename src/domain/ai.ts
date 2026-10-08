@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AiTaskSchema, type AiTask } from './ai-task.js';
-import { AI_CAPABILITIES } from './ai-capabilities.js';
+import { AI_CAPABILITIES, AI_LIMITS } from './ai-capabilities.js';
 import { dayInsights, undoChoices } from './ai-insights.js';
 import { PlaceInformationSchema, type PlaceInformationUpdate } from './place-information.js';
 import { Id, SafeUrl, PlaceSchema, SourceSchema, TripSchema, type Trip } from './schema.js';
@@ -372,6 +372,7 @@ export function aiContext(
       placeId: string | null;
     } | null,
     planningFeedback: null as string | null,
+    remainingPlanningPasses: AI_LIMITS.modelRounds - 1,
     routeResults: [] as Array<{
       fromPlaceId: string;
       toPlaceId: string;

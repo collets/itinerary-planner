@@ -380,6 +380,7 @@ describe('Phase 0–2 conversation contracts (scripted providers, not language-q
       })
       .mockImplementationOnce(async (context) => {
         expect(context.planningFeedback).toContain('changeIntent');
+        expect(context.remainingPlanningPasses).toBe(0);
         const candidate = context.places.find((p) => p.id === 'public-candidate')!;
         expect(candidate).toMatchObject({
           origin: 'discovered',
@@ -548,6 +549,41 @@ describe('Phase 0–2 conversation contracts (scripted providers, not language-q
     expect(job.proposals).toEqual([]);
     expect((await trips.read('example-trip')).etag).toBe(original.etag);
     expect(provider.enrich).not.toHaveBeenCalled();
+  });
+
+  it('repairs a post-lookup clarification/action conflict without repeating discovery or exceeding three passes', async () => {
+    const t = { ...task(['propose']), changeIntent: 'adjust-stops' as const };
+    const lookup = vi
+      .spyOn(provider, 'lookup')
+      .mockResolvedValue({ value: discovery(), actualCost: 0 });
+    const plan = vi
+      .spyOn(provider, 'plan')
+      .mockResolvedValueOnce({
+        value: reply({ task: t, lookups: [{ name: 'Luogo pubblico', area: 'Borgo Blu' }] }),
+        actualCost: 0,
+      })
+      .mockResolvedValueOnce({
+        value: reply({ task: t, clarification: 'Vuoi procedere?', options: [option()] }),
+        actualCost: 0,
+      })
+      .mockImplementationOnce(async (context) => {
+        expect(context.planningFeedback).toContain('operazioni incompatibili');
+        expect(context.lookupAvailable).toBe(false);
+        return { value: reply({ task: t, options: [option()] }), actualCost: 0 };
+      });
+    const { job, original } = await run('question-action-conflict', 'Accorcia la visita');
+    expect(job.status, job.message).toBe('ready');
+    expect(plan).toHaveBeenCalledTimes(3);
+    expect(lookup).toHaveBeenCalledOnce();
+    const ledger = (await ai.budget.read()).ledger;
+    expect(
+      ledger.runs[0].operations.filter((o) => o.id.includes('-model')).map((o) => o.id),
+    ).toEqual([
+      'question-action-conflict-model',
+      'question-action-conflict-model-1',
+      'question-action-conflict-model-2',
+    ]);
+    expect((await trips.read('example-trip')).etag).toBe(original.etag);
   });
 
   it('repairs a missing public location before routing when the planner omitted lookup', async () => {

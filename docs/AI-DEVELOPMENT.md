@@ -70,6 +70,12 @@ requests, including routing/research. Restart ordinary `pnpm dev` without an
 
 ### Executable changes and landmark coordinates
 
+Clarifications must agree with their persisted question and contain no concurrent
+operations. Inconsistent replies can use the same bounded correction mechanism.
+Every completed paid pass counts toward the ceiling, including corrections. The
+planner receives the remaining pass count so optional research cannot strand an
+otherwise executable final proposal.
+
 Tasks now retain `changeIntent` (`add-stop`, `replace-stop`, `adjust-stops`,
 `route`, `location-only`, `undo`, or null). It is required in new live replies;
 older stored tasks remain readable. A requested change cannot complete with

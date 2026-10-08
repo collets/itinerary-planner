@@ -88,7 +88,7 @@ const JobSchema = z
     ]),
     stage: z.enum(['research', 'model', 'lookup', 'information', 'routes', 'finalize', 'done']),
     modelRounds: z.number().int().min(0).max(AI_LIMITS.modelRounds).default(0),
-    feedback: z.enum(['schedule', 'constraints', 'execution']).nullable().default(null),
+    feedback: z.enum(['schedule', 'constraints', 'execution', 'contract']).nullable().default(null),
     task: AiTaskSchema.nullable().default(null),
     selectedChoice: AiTaskSchema.shape.pendingQuestion
       .unwrap()
@@ -975,13 +975,16 @@ export class AiService {
           this.now(),
         );
         context.task = job.task;
+        context.remainingPlanningPasses = AI_LIMITS.modelRounds - job.modelRounds - 1;
         context.selectedChoice = job.selectedChoice;
         context.planningFeedback =
-          job.feedback === 'execution'
-            ? 'La risposta precedente descrive una modifica, ma non contiene una proposta eseguibile che completa changeIntent. Restituisci options con le azioni richieste e gli eventuali locationRequests insieme; non chiedere approvazione prima dell’anteprima. Le coordinate di un luogo individuato identificano il monumento, non un ingresso: bastano per una visita esterna indicativa. Se esiste un vero ostacolo, chiedi un chiarimento utile o spiega il conflitto.'
-            : job.feedback
-              ? 'La proposta precedente non rispetta il programma o i vincoli richiesti. Usa tempi misurati e calcoli locali per correggerla; se non è fattibile, spiega il conflitto senza inventare una soluzione.'
-              : null;
+          job.feedback === 'contract'
+            ? 'La risposta precedente mescola una domanda e operazioni incompatibili. Se chiedi un vero chiarimento, clarification deve corrispondere esattamente a task.pendingQuestion.question e tutte le operazioni/options devono essere vuote. Se il luogo e la richiesta sono chiari, metti entrambi i campi domanda a null e genera la proposta eseguibile. Non chiedere una conferma preliminare per usare il punto del monumento.'
+            : job.feedback === 'execution'
+              ? 'La risposta precedente descrive una modifica, ma non contiene una proposta eseguibile che completa changeIntent. Restituisci options con le azioni richieste e gli eventuali locationRequests insieme; non chiedere approvazione prima dell’anteprima. Le coordinate di un luogo individuato identificano il monumento, non un ingresso: bastano per una visita esterna indicativa. Se esiste un vero ostacolo, chiedi un chiarimento utile o spiega il conflitto.'
+              : job.feedback
+                ? 'La proposta precedente non rispetta il programma o i vincoli richiesti. Usa tempi misurati e calcoli locali per correggerla; se non è fattibile, spiega il conflitto senza inventare una soluzione.'
+                : null;
         context.routeResults = job.routes.map((route) => ({
           fromPlaceId: route.fromPlaceId,
           toPlaceId: route.toPlaceId,
@@ -1009,6 +1012,9 @@ export class AiService {
           this.bounded((signal) => provider.plan(context, signal, operation)),
         );
         const output = AiModelOutputSchema.parse(raw);
+        // Count every completed provider pass before semantic checks, including
+        // a correction that must not escape the existing paid-pass ceiling.
+        job.modelRounds++;
         output.options.forEach((option) => {
           option.actions = orderAiIntents(enriched, option.actions);
         });
@@ -1030,7 +1036,7 @@ export class AiService {
             ? { question: output.clarification, choices: [] }
             : null,
         };
-        if (job.modelRounds > 0 && job.task) {
+        if (job.modelRounds > 1 && job.task) {
           task.constraints = retainConstraints(job.task.constraints, task.constraints);
           // Internal tool/refinement passes cannot silently turn an unfinished
           // write task into a read-only answer. Only a new user turn can do that.
@@ -1043,20 +1049,37 @@ export class AiService {
         }
         this.validateTask(task, context);
         job.task = task;
+        const pendingOperations =
+          output.options.length ||
+          output.lookups.length ||
+          output.informationRequests.length ||
+          output.placeInformationRequests.length ||
+          output.locationRequests.length ||
+          output.historyRequest;
+        // Equivalent wording in a read-only clarification needs no paid repair.
+        // The persisted question is canonical for the UI and its choice IDs.
+        if (task.pendingQuestion && output.clarification && !pendingOperations)
+          output.clarification = task.pendingQuestion.question;
         if (
           !!task.pendingQuestion !== !!output.clarification ||
-          (output.clarification &&
-            (output.options.length ||
-              output.lookups.length ||
-              output.informationRequests.length ||
-              output.placeInformationRequests.length ||
-              output.locationRequests.length ||
-              output.historyRequest))
-        )
+          (task.pendingQuestion && task.pendingQuestion.question !== output.clarification) ||
+          (output.clarification && pendingOperations)
+        ) {
+          if (job.modelRounds < AI_LIMITS.modelRounds) {
+            await update((j) => {
+              j.output = output;
+              j.feedback = 'contract';
+              j.stage = 'model';
+              j.status = 'planning';
+              j.message = 'Completo i dettagli della richiesta prima di preparare l’anteprima…';
+            });
+            return this.get(tripId, id);
+          }
           throw new AiPlanError(
             'invalid',
             'La domanda di chiarimento deve precedere ricerche e modifiche.',
           );
+        }
         const writes =
           output.options.some((o) => o.actions.length || o.routes.length) ||
           output.locationRequests.length ||
@@ -1068,7 +1091,6 @@ export class AiService {
           );
         if (output.historyRequest && (!task.goals.includes('undo') || output.options.length !== 1))
           throw new AiPlanError('invalid', 'Scegli una modifica dalla cronologia da annullare.');
-        job.modelRounds++;
         if (job.request.purpose === 'information') {
           if (
             output.options.length ||
