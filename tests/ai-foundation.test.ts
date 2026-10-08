@@ -458,84 +458,127 @@ describe('Phase 0–2 conversation contracts (scripted providers, not language-q
     expect(saved.trip.state).toEqual(original.trip.state);
   });
 
-  it('looks up a new stop and its missing public anchor together, then applies one atomic preview', async () => {
-    const current = await trips.read('example-trip');
-    await trips.mutate('example-trip', current.etag, (trip) => {
-      trip.plan.places[0].coordinates = { lat: 45.001, lng: 12.001, verifiedOn: '2026-10-01' };
-    });
-    const found = discovery();
-    found.places[0].name = 'Fabbrica sintetica';
-    found.places.push({ ...found.places[0], id: 'public-anchor', name: 'Museo del borgo' });
-    const lookup = vi.spyOn(provider, 'lookup').mockResolvedValue({ actualCost: 0, value: found });
-    const route = vi.spyOn(provider, 'route').mockImplementation(async (query) => ({
-      actualCost: 0,
-      value: {
-        fromPlaceId: query.fromPlaceId,
-        toPlaceId: query.toPlaceId,
-        durationMinutes: 10,
-        distanceKm: 0.5,
-        streets: ['Via sintetica'],
-        pois: [],
-        estimate: true,
-        provider: 'mock',
-        checkedAt: new Date(now).toISOString(),
-        directMinutes: 10,
-        extraWalkingMinutes: 0,
-        geometry: [],
-        citations: [],
-      },
-    }));
-    const t = { ...task(['propose']), changeIntent: 'add-stop' as const };
-    vi.spyOn(provider, 'plan')
-      .mockResolvedValueOnce({
-        value: reply({ task: t, lookups: [{ name: 'Fabbrica sintetica', area: 'Borgo Blu' }] }),
-        actualCost: 0,
-      })
-      .mockResolvedValueOnce({
-        value: reply({
-          task: t,
-          locationRequests: [{ placeId: 'blue-museum', candidateId: 'public-anchor' }],
-          options: [
-            option([
-              {
-                ...action('add'),
-                stepId: null,
-                placeId: 'public-candidate',
-                title: 'Fabbrica sintetica',
-                afterId: 'museum',
-                start: '2026-11-12T14:00:00+01:00',
-                durationMinutes: 20,
-              },
-            ]),
-          ],
-        }),
-        actualCost: 0,
+  it.each([false, true])(
+    'adds a stop and its sourced public anchor atomically, repairing an omitted mapping=%s',
+    async (omitMapping) => {
+      Object.assign(provider, { validateRoute: vi.fn() });
+      const current = await trips.read('example-trip');
+      await trips.mutate('example-trip', current.etag, (trip) => {
+        trip.plan.places[0].coordinates = { lat: 45.001, lng: 12.001, verifiedOn: '2026-10-01' };
       });
-    const { job, original } = await run('add-with-public-anchor', 'Aggiungi una fabbrica alle 14', {
-      stepId: undefined,
-    });
-    expect(job.status, job.message).toBe('ready');
-    expect(lookup).toHaveBeenCalledOnce();
-    expect(lookup.mock.calls[0][0]).toHaveLength(2);
-    expect(provider.enrich).not.toHaveBeenCalled();
-    expect(
-      route.mock.calls[0][1].plan.places.find((p) => p.id === 'blue-museum')!.coordinates,
-    ).toEqual(found.places[1].coordinates);
-    expect((await trips.read('example-trip')).etag).toBe(original.etag);
-    const saved = await ai.apply(
-      'example-trip',
-      job.proposals[0].id,
-      job.proposals[0].previewHash,
-      original.etag,
-    );
-    expect(saved.trip.plan.places.find((p) => p.id === 'blue-museum')!.coordinates).toEqual(
-      found.places[1].coordinates,
-    );
-    expect(saved.trip.plan.days[0].stepIds).toContain(
-      saved.trip.plan.steps.find((s) => s.kind === 'stop' && s.placeId === 'public-candidate')!.id,
-    );
-    expect(saved.trip.state).toEqual(original.trip.state);
-  });
+      const found = discovery();
+      found.places[0].name = 'Fabbrica sintetica';
+      found.places.push({ ...found.places[0], id: 'public-anchor', name: 'Museo del borgo' });
+      const lookup = vi
+        .spyOn(provider, 'lookup')
+        .mockResolvedValue({ actualCost: 0, value: found });
+      const route = vi.spyOn(provider, 'route').mockImplementation(async (query) => ({
+        actualCost: 0,
+        value: {
+          fromPlaceId: query.fromPlaceId,
+          toPlaceId: query.toPlaceId,
+          durationMinutes: 10,
+          distanceKm: 0.5,
+          streets: ['Via sintetica'],
+          pois: [],
+          estimate: true,
+          provider: 'mock',
+          checkedAt: new Date(now).toISOString(),
+          directMinutes: 10,
+          extraWalkingMinutes: 0,
+          geometry: [],
+          citations: [],
+        },
+      }));
+      const t = { ...task(['propose']), changeIntent: 'add-stop' as const };
+      const plan = vi
+        .spyOn(provider, 'plan')
+        .mockResolvedValueOnce({
+          value: reply({ task: t, lookups: [{ name: 'Fabbrica sintetica', area: 'Borgo Blu' }] }),
+          actualCost: 0,
+        })
+        .mockResolvedValueOnce({
+          value: reply({
+            task: t,
+            locationRequests: omitMapping
+              ? []
+              : [{ placeId: 'blue-museum', candidateId: 'public-anchor' }],
+            options: [
+              option([
+                {
+                  ...action('add'),
+                  stepId: null,
+                  placeId: 'public-candidate',
+                  title: 'Fabbrica sintetica',
+                  afterId: 'museum',
+                  start: '2026-11-12T14:00:00+01:00',
+                  durationMinutes: 20,
+                },
+              ]),
+            ],
+          }),
+          actualCost: 0,
+        })
+        .mockImplementationOnce(async (context) => {
+          expect(omitMapping).toBe(true);
+          expect(context.remainingPlanningPasses).toBe(0);
+          expect(context.planningFeedback).toContain('blue-museum');
+          expect(context.planningFeedback).toContain('locationRequests');
+          expect(route).not.toHaveBeenCalled();
+          expect(lookup).toHaveBeenCalledOnce();
+          return {
+            actualCost: 0,
+            value: reply({
+              task: t,
+              locationRequests: [{ placeId: 'blue-museum', candidateId: 'public-anchor' }],
+              options: [
+                option([
+                  {
+                    ...action('add'),
+                    stepId: null,
+                    placeId: 'public-candidate',
+                    title: 'Fabbrica sintetica',
+                    afterId: 'museum',
+                    start: '2026-11-12T14:00:00+01:00',
+                    durationMinutes: 20,
+                  },
+                ]),
+              ],
+            }),
+          };
+        });
+      const { job, original } = await run(
+        'add-with-public-anchor',
+        'Aggiungi una fabbrica alle 14',
+        {
+          stepId: undefined,
+        },
+      );
+      expect(job.status, job.message).toBe('ready');
+      expect(plan).toHaveBeenCalledTimes(omitMapping ? 3 : 2);
+      expect(lookup).toHaveBeenCalledOnce();
+      expect(lookup.mock.calls[0][0]).toHaveLength(2);
+      expect(provider.enrich).not.toHaveBeenCalled();
+      expect(
+        route.mock.calls[0][1].plan.places.find((p) => p.id === 'blue-museum')!.coordinates,
+      ).toEqual(found.places[1].coordinates);
+      expect((await trips.read('example-trip')).etag).toBe(original.etag);
+      const saved = await ai.apply(
+        'example-trip',
+        job.proposals[0].id,
+        job.proposals[0].previewHash,
+        original.etag,
+      );
+      expect(saved.trip.plan.places.find((p) => p.id === 'blue-museum')!.coordinates).toEqual(
+        found.places[1].coordinates,
+      );
+      expect(saved.trip.plan.days[0].stepIds).toContain(
+        saved.trip.plan.steps.find((s) => s.kind === 'stop' && s.placeId === 'public-candidate')!
+          .id,
+      );
+      expect(saved.trip.state).toEqual(original.trip.state);
+    },
+  );
 
   it('fails honestly after three prose-only passes and cannot downgrade an unfinished add to an answer', async () => {
     const t = { ...task(['propose']), changeIntent: 'add-stop' as const };

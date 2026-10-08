@@ -92,6 +92,13 @@ overlay even if it is not a museum or an existing stop. Private logistics remain
 excluded. Location association and schedule changes use the same reviewed
 atomic proposal; there is no separate preliminary approval step.
 
+Before dispatching routes, validate every endpoint against the projected sourced
+locations. If named lookup succeeded but the planner omitted a public anchor's
+location association, one remaining planning pass receives the missing place IDs
+and must return the mapping and schedule together. This reuses collected evidence,
+adds no search round, and remains inside the three-pass/spending ceiling. An
+unresolved association still fails safely before any routing-provider request.
+
 Landmark coordinates do not certify a visitor entrance. Proposals explicitly
 show that limitation. It does not prevent an estimated exterior visit and a
 measured walk to the sourced point. A user requirement for verified interior

@@ -88,7 +88,10 @@ const JobSchema = z
     ]),
     stage: z.enum(['research', 'model', 'lookup', 'information', 'routes', 'finalize', 'done']),
     modelRounds: z.number().int().min(0).max(AI_LIMITS.modelRounds).default(0),
-    feedback: z.enum(['schedule', 'constraints', 'execution', 'contract']).nullable().default(null),
+    feedback: z
+      .enum(['schedule', 'constraints', 'execution', 'contract', 'location'])
+      .nullable()
+      .default(null),
     task: AiTaskSchema.nullable().default(null),
     selectedChoice: AiTaskSchema.shape.pendingQuestion
       .unwrap()
@@ -982,9 +985,11 @@ export class AiService {
             ? 'La risposta precedente mescola una domanda e operazioni incompatibili. Se chiedi un vero chiarimento, clarification deve corrispondere esattamente a task.pendingQuestion.question e tutte le operazioni/options devono essere vuote. Se il luogo e la richiesta sono chiari, metti entrambi i campi domanda a null e genera la proposta eseguibile. Non chiedere una conferma preliminare per usare il punto del monumento.'
             : job.feedback === 'execution'
               ? 'La risposta precedente descrive una modifica, ma non contiene una proposta eseguibile che completa changeIntent. Restituisci options con le azioni richieste e gli eventuali locationRequests insieme; non chiedere approvazione prima dell’anteprima. Le coordinate di un luogo individuato identificano il monumento, non un ingresso: bastano per una visita esterna indicativa. Se esiste un vero ostacolo, chiedi un chiarimento utile o spiega il conflitto.'
-              : job.feedback
-                ? 'La proposta precedente non rispetta il programma o i vincoli richiesti. Usa tempi misurati e calcoli locali per correggerla; se non è fattibile, spiega il conflitto senza inventare una soluzione.'
-                : null;
+              : job.feedback === 'location'
+                ? `La ricerca per nome è già completata, ma mancano le associazioni di posizione per i luoghi del percorso: ${JSON.stringify(context.places.filter((p) => !p.location.hasCoordinates && job.queue.some((q) => [q.fromPlaceId, q.toPlaceId, ...q.poiPlaceIds].includes(p.id))).map((p) => ({ placeId: p.id, name: p.name })))}. Restituisci locationRequests con il placeId originale e il candidateId del risultato corrispondente già individuato, insieme alle options della modifica richiesta. Non duplicare la tappa esistente, non richiedere nuove ricerche o un’approvazione preliminare e non chiedere coordinate all’utente. Se i risultati non consentono un’associazione sicura, chiedi solo un chiarimento utile sull’identità.`
+                : job.feedback
+                  ? 'La proposta precedente non rispetta il programma o i vincoli richiesti. Usa tempi misurati e calcoli locali per correggerla; se non è fattibile, spiega il conflitto senza inventare una soluzione.'
+                  : null;
         context.routeResults = job.routes.map((route) => ({
           fromPlaceId: route.fromPlaceId,
           toPlaceId: route.toPlaceId,
@@ -1309,24 +1314,24 @@ export class AiService {
         }
         // Recover missing public locations before any routing dispatch. The
         // traveler need not know coordinates even if the planner omitted lookup.
+        const missing = [
+          ...new Set(queue.flatMap((q) => [q.fromPlaceId, q.toPlaceId, ...q.poiPlaceIds])),
+        ].filter(
+          (id) =>
+            !context.places.find((p) => p.id === id)?.location.hasCoordinates &&
+            !job.locations.some((location) => location.placeId === id),
+        );
+        const missingPublic =
+          missing.length > 0 &&
+          missing.length <= 2 &&
+          missing.every((id) => context.places.find((p) => p.id === id)?.publicResearchAllowed);
         if (
           queue.length &&
           provider.validateRoute &&
           context.lookupAvailable &&
           job.modelRounds < AI_LIMITS.modelRounds
         ) {
-          const missing = [
-            ...new Set(queue.flatMap((q) => [q.fromPlaceId, q.toPlaceId, ...q.poiPlaceIds])),
-          ].filter(
-            (id) =>
-              !context.places.find((p) => p.id === id)?.location.hasCoordinates &&
-              !job.locations.some((location) => location.placeId === id),
-          );
-          if (
-            missing.length &&
-            missing.length <= 2 &&
-            missing.every((id) => context.places.find((p) => p.id === id)?.publicResearchAllowed)
-          ) {
+          if (missingPublic) {
             const lookups = AiPlaceLookupsSchema.parse(
               missing.map((id) => ({
                 name: context.places.find((p) => p.id === id)!.name,
@@ -1343,6 +1348,28 @@ export class AiService {
             return this.get(tripId, id);
           }
         }
+        // Lookup evidence alone does not update an existing place's position.
+        // Repair an omitted association before invoking the routing provider,
+        // using the same three-pass budget and the already collected evidence.
+        if (
+          provider.validateRoute &&
+          missingPublic &&
+          !context.lookupAvailable &&
+          job.discovery.places.length &&
+          job.modelRounds < AI_LIMITS.modelRounds
+        ) {
+          await update((j) => {
+            j.output = output;
+            j.queue = queue;
+            j.feedback = 'location';
+            j.stage = 'model';
+            j.status = 'planning';
+            j.message = 'Associo le posizioni già individuate prima di calcolare il percorso…';
+          });
+          return this.get(tripId, id);
+        }
+        const located = this.withLocations(enriched, job.locations);
+        queue.forEach((query) => provider.validateRoute?.(query, located));
         await update((j) => {
           j.output = output;
           j.queue = queue.filter(
